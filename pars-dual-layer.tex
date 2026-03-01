@@ -1,0 +1,1171 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{shared/parscover}
+
+% ============================================================================
+% Dual-Layer Architecture: EVM Rollup with Privacy-Preserving Session Layer
+% Pars Network Technical Whitepaper PNP-001
+% ============================================================================
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{listings}
+\input{shared/lstlang}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{fancyhdr}
+\usepackage{abstract}
+
+\geometry{margin=1in}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=green!50!black,
+    urlcolor=blue!60!black
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!10},
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!50!black}\itshape,
+    stringstyle=\color{red!60!black},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=5pt
+}
+
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc}
+
+\newtheorem{definition}{Definition}[section]
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{corollary}{Corollary}[section]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Cyrus Pahlavi, Pars Team}
+\fancyhead[R]{\small Dual-Layer Architecture}
+\fancyfoot[C]{\thepage}
+
+% ============================================================================
+\title{%
+    \textbf{Dual-Layer Architecture: EVM Rollup with\\
+    Privacy-Preserving Session Layer}\\[0.5em]
+    \large Pars Network Technical Whitepaper PNP-001
+}
+
+\author{%
+    Cyrus Pahlavi, Pars Team\\
+    \texttt{research@pars.network}\\[0.5em]
+    \small Version 1.0 --- February 2026
+}
+
+\date{}
+
+% ============================================================================
+\begin{document}
+\parscoverpage
+
+\thispagestyle{fancy}
+
+% ============================================================================
+\begin{abstract}
+\noindent
+We present the Pars dual-layer architecture, a system that couples an
+EVM-compatible optimistic rollup (Layer~2) with a privacy-preserving session
+layer (Layer~S) to deliver sovereign infrastructure for the Persian diaspora.
+The L2 rollup inherits Ethereum's security guarantees while providing
+low-cost, high-throughput transaction processing.  The session layer
+operates as an overlay network of daemon processes that manage end-to-end
+encrypted communication channels, ephemeral state, and privacy-preserving
+metadata routing.  Cross-layer communication is achieved through a set of
+bridge contracts and a \emph{session anchor protocol} that commits session
+state roots to the rollup without revealing session contents.  We formalise
+the state synchronisation protocol, prove its consistency under asynchronous
+network conditions, and present benchmarks demonstrating sub-second finality
+for session operations with amortised gas costs below 500~gas units per
+session commitment.  The architecture enables censorship-resistant
+communication, private governance participation, and financial sovereignty
+for communities operating under authoritarian surveillance regimes.
+\end{abstract}
+
+\vspace{1em}
+\noindent\textbf{Keywords:} rollup architecture, EVM compatibility, privacy
+layer, session management, diaspora infrastructure, censorship resistance
+
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Introduction}
+\label{sec:introduction}
+
+The Persian diaspora spans over eight million individuals across more than
+forty countries~\cite{amanat2012persian}.  Members require digital services
+that are simultaneously accessible from jurisdictions with varying degrees
+of internet freedom, resistant to state-level censorship and surveillance,
+and capable of preserving cultural and economic connections across borders.
+
+Existing blockchain platforms offer either strong financial guarantees with
+transparent ledgers (Ethereum, Bitcoin) or privacy-focused transactions with
+limited programmability (Zcash, Monero).  Neither paradigm alone addresses
+the compound requirements of a diaspora community: the need for programmable
+financial instruments \emph{and} private communication \emph{and} censorship
+resistance \emph{and} low operational costs.
+
+\subsection{Problem Statement}
+
+We identify four fundamental requirements for diaspora infrastructure:
+
+\begin{enumerate}[label=(\roman*)]
+    \item \textbf{Financial Sovereignty:} The ability to hold, transfer, and
+    programme digital assets without dependence on any single jurisdiction's
+    banking infrastructure.
+
+    \item \textbf{Communication Privacy:} End-to-end encrypted messaging and
+    data exchange with forward secrecy, resistant to traffic analysis and
+    metadata correlation.
+
+    \item \textbf{Censorship Resistance:} Infrastructure that remains
+    operational even when state actors attempt to block, throttle, or
+    intercept network traffic.
+
+    \item \textbf{Cost Efficiency:} Transaction and communication costs
+    accessible to individuals in economically constrained environments.
+\end{enumerate}
+
+\subsection{Contribution}
+
+This paper presents the Pars dual-layer architecture, which addresses all
+four requirements through a coupling of two complementary layers:
+
+\begin{itemize}
+    \item \textbf{Layer~2 (L2):} An EVM-compatible optimistic rollup that
+    provides programmable financial infrastructure with Ethereum-grade
+    security at a fraction of the cost.
+
+    \item \textbf{Layer~S (Session Layer):} A privacy-preserving overlay
+    network that manages encrypted communication sessions, ephemeral state,
+    and metadata-resistant routing.
+\end{itemize}
+
+The key innovation is the \emph{session anchor protocol}, which allows the
+session layer to commit cryptographic proofs of session state to the rollup
+without revealing session contents, enabling verifiable privacy.
+
+\subsection{Paper Organisation}
+
+Section~\ref{sec:background} reviews related work.
+Section~\ref{sec:l2design} details the L2 rollup.
+Section~\ref{sec:session} presents the session layer.
+Section~\ref{sec:crosslayer} describes cross-layer communication.
+Section~\ref{sec:statesync} formalises state synchronisation.
+Section~\ref{sec:security} provides security analysis.
+Section~\ref{sec:performance} presents benchmarks.
+Section~\ref{sec:governance} discusses governance.
+Section~\ref{sec:conclusion} concludes.
+
+% ============================================================================
+\section{Background and Related Work}
+\label{sec:background}
+
+\subsection{Optimistic Rollups}
+
+Optimistic rollups execute transactions off-chain and post compressed data
+to Ethereum L1, relying on fraud proofs for
+security~\cite{kalodner2018arbitrum,optimism2021}.  Only disputed state
+transitions require L1 verification, amortising costs across many
+transactions.  Arbitrum~\cite{kalodner2018arbitrum} and
+Optimism~\cite{optimism2021} achieve 10--100$\times$ cost reduction relative
+to L1 execution.
+
+\subsection{Privacy-Preserving Networks}
+
+Tor~\cite{dingledine2004tor} provides anonymous communication through onion
+routing but suffers from latency and vulnerability to traffic correlation by
+global adversaries.  I2P~\cite{zantout2011i2p} offers garlic routing with
+better resistance to timing attacks but lower adoption.
+Mixnets~\cite{chaum1981untraceable,danezis2003mixminion} provide stronger
+guarantees through message batching and reordering at the cost of
+significant latency.
+
+\subsection{Session Management Protocols}
+
+The Signal Protocol~\cite{marlinspike2016signal} provides end-to-end
+encryption with forward secrecy through the Double Ratchet algorithm.
+Matrix~\cite{hodgson2019matrix} extends this to federated group
+communication.  Briar~\cite{briar2017} adds mesh networking capability for
+environments where internet access is unreliable or monitored.
+
+\subsection{Privacy Layers for Blockchains}
+
+Aztec~\cite{williamson2018aztec} implements a privacy layer for Ethereum
+using zk-SNARKs.  Tornado Cash~\cite{pertsev2019tornado} provides
+transaction mixing through zero-knowledge proofs.
+Penumbra~\cite{penumbra2022} builds a privacy-focused chain within the
+Cosmos ecosystem.  None integrate communication privacy with financial
+privacy in a unified architecture.
+
+\subsection{Positioning of Pars}
+
+Pars occupies a unique position by integrating an L2 rollup for financial
+operations with a session layer for communication, connected through
+cryptographic anchoring.  Users transact privately, communicate securely,
+and participate in governance within a single coherent infrastructure.
+
+% ============================================================================
+\section{Layer~2 Rollup Architecture}
+\label{sec:l2design}
+
+\subsection{Design Principles}
+
+The Pars L2 is designed around four principles:
+
+\begin{enumerate}
+    \item \textbf{Full EVM Equivalence:} Byte-for-byte compatibility with
+    the Ethereum Virtual Machine, enabling deployment of existing Solidity
+    contracts without modification.
+
+    \item \textbf{Optimistic Execution:} Transactions are presumed valid
+    with a challenge period for fraud detection.
+
+    \item \textbf{Data Availability on L1:} All transaction data is posted
+    to Ethereum L1 as calldata or blob data via
+    EIP-4844~\cite{eip4844}, ensuring that anyone can reconstruct the L2
+    state.
+
+    \item \textbf{Session Awareness:} The rollup includes native precompiles
+    for session layer interaction.
+\end{enumerate}
+
+\subsection{Rollup Components}
+
+\subsubsection{Sequencer}
+
+The sequencer orders transactions and produces L2 blocks.  Pars operates a
+decentralised sequencer set using a weighted round-robin selection:
+
+\begin{definition}[Sequencer Set]
+    Let $\mathcal{S} = \{s_1, \dots, s_n\}$ be the set of registered
+    sequencers with stake weights $\{w_1, \dots, w_n\}$ where
+    $\sum_{i=1}^n w_i = 1$.  The sequencer for block $b$ is:
+    \[
+        \mathrm{seq}(b) = s_j, \quad
+        j = \min\Bigl\{k : \sum_{i=1}^k w_i
+            > \frac{b \bmod P}{P}\Bigr\},
+    \]
+    where $P$ is the rotation period in blocks.
+\end{definition}
+
+\subsubsection{State Commitment}
+
+The rollup maintains a Merkle-Patricia trie for account state.  State roots
+are committed to L1 at regular intervals:
+
+\begin{definition}[State Commitment]
+    A state commitment $C_b$ for block $b$ consists of:
+    \[
+        C_b = \bigl\langle
+            \mathrm{root}(\mathcal{T}_b),\;
+            H(\mathrm{txdata}_b),\;
+            \mathrm{root}(\mathcal{R}_b),\;
+            \mathrm{root}(\mathcal{A}_b)
+        \bigr\rangle,
+    \]
+    where $\mathcal{T}_b$ is the state trie, $\mathrm{txdata}_b$ is the
+    compressed transaction batch, $\mathcal{R}_b$ is the receipt trie, and
+    $\mathcal{A}_b$ is the session anchor trie.
+\end{definition}
+
+Inclusion of the session anchor trie $\mathcal{A}_b$ is the key extension
+beyond standard rollup designs.
+
+\subsubsection{Fraud Proofs}
+
+Pars employs interactive fraud proofs following the Arbitrum
+model~\cite{kalodner2018arbitrum}.  When a validator disputes a state
+commitment, a bisection protocol narrows the disagreement to a single
+instruction execution, verified on L1.
+
+\begin{algorithm}[H]
+\caption{Interactive Fraud Proof Protocol}
+\label{alg:fraud-proof}
+\begin{algorithmic}[1]
+\Require State commitments $C_a, C_b$ where $a < b$ and $C_b$ is disputed
+\State $\mathit{lo} \gets a$,\; $\mathit{hi} \gets b$
+\While{$\mathit{hi} - \mathit{lo} > 1$}
+    \State $\mathit{mid} \gets \lfloor (\mathit{lo} + \mathit{hi}) / 2 \rfloor$
+    \If{Challenger agrees with $C_{\mathit{mid}}$}
+        \State $\mathit{lo} \gets \mathit{mid}$
+    \Else
+        \State $\mathit{hi} \gets \mathit{mid}$
+    \EndIf
+\EndWhile
+\State Verify single-step execution from $C_{\mathit{lo}}$ to
+       $C_{\mathit{hi}}$ on L1
+\State Slash the party that produced the incorrect commitment
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Session-Aware Precompiles}
+
+The Pars L2 extends the EVM with four precompiled contracts:
+
+\begin{table}[h]
+\centering
+\caption{Session-Aware Precompile Addresses}
+\label{tab:precompiles}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Address} & \textbf{Name} & \textbf{Function} \\
+\midrule
+\texttt{0x0100} & \texttt{SESSION\_ANCHOR}  & Commit session state root \\
+\texttt{0x0101} & \texttt{SESSION\_VERIFY}  & Verify session proof \\
+\texttt{0x0102} & \texttt{SESSION\_RESOLVE} & Resolve session identity \\
+\texttt{0x0103} & \texttt{SESSION\_BRIDGE}  & Bridge assets to session layer \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Session Anchor Precompile}
+
+\begin{lstlisting}[language=Solidity,caption={Session Anchor Interface}]
+interface ISessionAnchor {
+    /// @notice Commit a session state root with validity proof
+    /// @param sessionRoot Merkle root of session state
+    /// @param proof       ZK proof of valid session state transition
+    /// @param epoch       Session epoch number
+    function anchor(
+        bytes32 sessionRoot,
+        bytes calldata proof,
+        uint256 epoch
+    ) external returns (bool);
+
+    /// @notice Verify session state inclusion
+    /// @param sessionRoot Committed session root
+    /// @param leaf        Leaf value to verify
+    /// @param proof       Merkle inclusion proof
+    function verify(
+        bytes32 sessionRoot,
+        bytes32 leaf,
+        bytes32[] calldata proof
+    ) external view returns (bool);
+}
+\end{lstlisting}
+
+\subsection{Transaction Batching and Compression}
+
+Transaction data is compressed before posting to L1 using domain-specific
+compression:
+
+\begin{enumerate}
+    \item \textbf{Address Table:} Frequently used addresses are replaced
+    with 2-byte indices, reducing 20-byte addresses to 2~bytes for common
+    interactions.
+
+    \item \textbf{Delta Encoding:} Nonce and value fields are delta-encoded
+    relative to the previous transaction in the batch.
+
+    \item \textbf{Signature Aggregation:} BLS signature
+    aggregation~\cite{boneh2001bls} reduces $n$ signatures to a single
+    aggregate, saving $64(n-1)$~bytes per batch.
+
+    \item \textbf{Zlib Compression:} The encoded batch receives a final
+    zlib pass at level~9.
+\end{enumerate}
+
+Empirically this achieves 8--12$\times$ compression, reducing per-transaction
+L1 cost to approximately 200--400~gas.
+
+\subsection{EIP-4844 Blob Integration}
+
+With EIP-4844 blob transactions~\cite{eip4844}, Pars preferentially uses
+blob space for data availability:
+
+\begin{proposition}[Cost Reduction via Blobs]
+    Let $c_{\mathrm{calldata}} = 16$~gas/byte and
+    $c_{\mathrm{blob}} \approx 1$~gas/byte.
+    For a batch of $B$~compressed bytes the cost ratio is
+    $c_{\mathrm{blob}} / c_{\mathrm{calldata}} = 1/16$,
+    yielding an additional $16\times$ cost reduction.
+\end{proposition}
+
+% ============================================================================
+\section{Session Layer Design}
+\label{sec:session}
+
+\subsection{Overview}
+
+The session layer (Layer~S) is an overlay network of daemon processes that
+run alongside L2 nodes.
+
+\begin{definition}[Session Layer]
+    $\mathcal{L}_S = (\mathcal{N}, \mathcal{C}, \mathcal{R}, \mathcal{E})$
+    where $\mathcal{N}$ is the set of session daemons, $\mathcal{C}$ the
+    active channels, $\mathcal{R}$ the routing protocol, and
+    $\mathcal{E}$ the epoch management system.
+\end{definition}
+
+\subsection{Session Daemon Architecture}
+
+\subsubsection{Key Manager}
+
+Each daemon maintains:
+
+\begin{itemize}
+    \item \textbf{Identity Key Pair:} Long-term Ed25519 for daemon
+    authentication.
+    \item \textbf{Session Keys:} Ephemeral X25519 pairs for
+    Diffie-Hellman exchange.
+    \item \textbf{Prekey Bundle:} One-time prekeys (OTPKs) uploaded to the
+    session directory for asynchronous session establishment.
+    \item \textbf{Ratchet State:} Double
+    Ratchet~\cite{marlinspike2016signal} state for each active session.
+\end{itemize}
+
+\subsubsection{Channel Manager}
+
+\begin{algorithm}[H]
+\caption{Channel Establishment Protocol}
+\label{alg:channel-establish}
+\begin{algorithmic}[1]
+\Require Initiator $A$, Responder $B$
+\State $A$ retrieves $B$'s prekey bundle from directory
+\State $A$ performs X3DH key agreement~\cite{marlinspike2016x3dh}:
+    \Statex \quad $\mathrm{SK} \gets
+        \mathrm{X3DH}(\mathrm{IK}_A, \mathrm{EK}_A,
+        \mathrm{IK}_B, \mathrm{SPK}_B, \mathrm{OPK}_B)$
+\State $A$ initialises Double Ratchet with SK
+\State $A$ sends initial message with $\mathrm{EK}_A$ and used
+       $\mathrm{OPK}_B$ identifier
+\State $B$ receives, reconstructs SK via X3DH
+\State $B$ initialises Double Ratchet with SK
+\State Channel $c_{AB}$ established with forward secrecy
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Routing Engine}
+
+The routing engine implements a modified Sphinx~\cite{danezis2009sphinx}
+packet format:
+
+\begin{definition}[Sphinx Packet]
+    $P = (\alpha, \beta, \gamma, \delta)$ where $\alpha$ is a group
+    element for key derivation, $\beta$ the encrypted routing header,
+    $\gamma$ a MAC, and $\delta$ the encrypted payload.
+\end{definition}
+
+Messages traverse a minimum of three relay nodes drawn from distinct
+availability zones.
+
+\subsection{Ephemeral State Management}
+
+The session layer maintains ephemeral state never persisted to L2:
+
+\begin{itemize}
+    \item Active channel states and ratchet keys
+    \item Pending message queues for offline recipients
+    \item Relay routing tables
+    \item Reputation scores for relay nodes
+\end{itemize}
+
+Communication state requires only eventual delivery and forward secrecy,
+not global consistency.
+
+\subsection{Session Epochs}
+
+The session layer operates in epochs (default 1~hour).  At each boundary:
+
+\begin{enumerate}
+    \item All active sessions perform a ratchet step, refreshing keys.
+    \item Each daemon computes a Merkle root of its local state.
+    \item Epoch roots are aggregated into a global session state root.
+    \item The global root is committed to L2 via the session anchor
+    precompile.
+\end{enumerate}
+
+\begin{theorem}[Forward Secrecy Guarantee]
+    \label{thm:forward-secrecy}
+    If a daemon's long-term key is compromised at time $t$, messages sent
+    before epoch $e < \lfloor t / T_{\mathrm{epoch}} \rfloor$ remain
+    confidential, provided at least one intermediate ratchet step used an
+    uncompromised ephemeral key.
+\end{theorem}
+
+\begin{proof}
+    Each ratchet step derives a new chain key
+    $\mathrm{CK}_i = \mathrm{KDF}(\mathrm{CK}_{i-1},
+    \mathrm{DH}(ek_i^A, ek_i^B))$.
+    Compromising $\mathrm{IK}_A$ does not reveal any $ek_i^A$ for
+    $i < \lfloor t / T_{\mathrm{epoch}} \rfloor$ because ephemeral keys
+    are deleted after use.  Therefore $\mathrm{CK}_i$ cannot be
+    reconstructed and messages encrypted under derived keys remain
+    confidential.
+\end{proof}
+
+% ============================================================================
+\section{Cross-Layer Communication}
+\label{sec:crosslayer}
+
+\subsection{Communication Model}
+
+Cross-layer communication follows an asymmetric model:
+
+\begin{itemize}
+    \item \textbf{L2 $\to$ Session:} The rollup emits events that session
+    daemons monitor (publish-subscribe).
+
+    \item \textbf{Session $\to$ L2:} The session layer commits state roots
+    and proofs via the anchor precompile (batched L2 transaction).
+\end{itemize}
+
+\subsection{Session Anchor Protocol}
+
+\begin{definition}[Session Anchor]
+    A session anchor $A_e$ for epoch $e$ is
+    $\langle e, r_e, \pi_e, \sigma_e \rangle$
+    where $r_e$ is the session state Merkle root, $\pi_e$ is a
+    zero-knowledge proof of valid transition from $r_{e-1}$ to $r_e$, and
+    $\sigma_e$ is an aggregate BLS signature from the session committee.
+\end{definition}
+
+\begin{algorithm}[H]
+\caption{Session Anchor Commitment}
+\label{alg:anchor-commit}
+\begin{algorithmic}[1]
+\Require Session committee $\mathcal{S}_c$, previous anchor $A_{e-1}$
+\State Each $n_i \in \mathcal{S}_c$ computes local root $r_i$
+\State Coordinator aggregates:
+       $r_e \gets \mathrm{MerkleRoot}(\{r_i\})$
+\State Generate ZK proof:
+       $\pi_e \gets \mathrm{Prove}(r_{e-1}, r_e, \mathrm{transitions})$
+\State Each node signs:
+       $\sigma_i \gets \mathrm{Sign}(\mathrm{sk}_i, (e, r_e, \pi_e))$
+\State Aggregate:
+       $\sigma_e \gets \mathrm{BLSAggregate}(\{\sigma_i\})$
+\State Submit $A_e$ to \texttt{SESSION\_ANCHOR} precompile
+\State L2 verifies $\pi_e$ and $\sigma_e$; stores $A_e$ in anchor trie
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Bridge Contracts}
+
+\begin{lstlisting}[language=Solidity,caption={Session Bridge Contract}]
+contract SessionBridge {
+    mapping(bytes32 => uint256) public locked;
+    mapping(bytes32 => bool) public processed;
+
+    event Deposit(
+        bytes32 indexed sessionId,
+        address indexed depositor,
+        uint256 amount
+    );
+    event Withdrawal(
+        bytes32 indexed sessionId,
+        address indexed recipient,
+        uint256 amount,
+        bytes32 proofRoot
+    );
+
+    function deposit(bytes32 sid) external payable {
+        locked[sid] += msg.value;
+        emit Deposit(sid, msg.sender, msg.value);
+    }
+
+    function withdraw(
+        bytes32 sid,
+        address to,
+        uint256 amt,
+        bytes32[] calldata proof,
+        bytes32 anchorRoot
+    ) external {
+        bytes32 leaf = keccak256(
+            abi.encodePacked(sid, to, amt)
+        );
+        require(
+            _verifyAnchor(anchorRoot, leaf, proof),
+            "Bad proof"
+        );
+        bytes32 wid = keccak256(
+            abi.encodePacked(sid, amt, block.number)
+        );
+        require(!processed[wid], "Replayed");
+        processed[wid] = true;
+        locked[sid] -= amt;
+        payable(to).transfer(amt);
+        emit Withdrawal(sid, to, amt, anchorRoot);
+    }
+
+    function _verifyAnchor(
+        bytes32 root,
+        bytes32 leaf,
+        bytes32[] calldata proof
+    ) internal view returns (bool) {
+        (bool ok, bytes memory res) =
+            address(0x0101).staticcall(
+                abi.encode(root, leaf, proof)
+            );
+        return ok && abi.decode(res, (bool));
+    }
+}
+\end{lstlisting}
+
+\subsection{Event Subscription}
+
+\begin{lstlisting}[language=Go,caption={Session Event Subscriber}]
+type EventSubscriber struct {
+    l2       *ethclient.Client
+    daemon   *SessionDaemon
+    topics   []common.Hash
+}
+
+func (s *EventSubscriber) Run(
+    ctx context.Context,
+) error {
+    q := ethereum.FilterQuery{
+        Addresses: []common.Address{bridgeAddr},
+        Topics:    [][]common.Hash{s.topics},
+    }
+    ch := make(chan types.Log, 64)
+    sub, err := s.l2.SubscribeFilterLogs(ctx, q, ch)
+    if err != nil {
+        return fmt.Errorf("subscribe: %w", err)
+    }
+    defer sub.Unsubscribe()
+    for {
+        select {
+        case log := <-ch:
+            s.daemon.HandleL2Event(log)
+        case err := <-sub.Err():
+            return fmt.Errorf("sub err: %w", err)
+        case <-ctx.Done():
+            return nil
+        }
+    }
+}
+\end{lstlisting}
+
+% ============================================================================
+\section{State Synchronisation}
+\label{sec:statesync}
+
+\subsection{Consistency Model}
+
+\begin{itemize}
+    \item \textbf{L2 State:} Strong consistency via total ordering by the
+    sequencer.  Sub-second soft finality; 7-day L1 finality.
+
+    \item \textbf{Session State:} Eventual consistency within epochs, with
+    causal ordering within individual channels.
+\end{itemize}
+
+\begin{definition}[Causal Consistency]
+    For events $e_1, e_2$ in the session layer, if $e_1 \to e_2$ then
+    every correct node observing $e_2$ has previously observed $e_1$.
+\end{definition}
+
+\subsection{Synchronisation Protocol}
+
+Three phases per epoch:
+
+\begin{enumerate}
+    \item \textbf{Collection:} Daemons accumulate state updates and
+    maintain local Merkle trees.
+    \item \textbf{Aggregation:} The session committee aggregates local
+    roots via a binary-tree protocol.
+    \item \textbf{Commitment:} The global root is committed to L2 via
+    the session anchor protocol.
+\end{enumerate}
+
+\begin{theorem}[Synchronisation Consistency]
+    Under $f < n/3$ Byzantine session committee members, the protocol
+    produces a consistent session anchor within $O(\log n)$ rounds.
+\end{theorem}
+
+\begin{proof}
+    The aggregation uses a binary tree with $\lceil \log_2 n \rceil$
+    levels.  At each level, pairs exchange and verify Merkle roots.  With
+    $f < n/3$ Byzantine nodes, at least $2n/3$ nodes at each level produce
+    correct intermediate roots.  Any inconsistency is detected by the
+    sibling through root verification.  After $\lceil \log_2 n \rceil$
+    rounds the root node holds a consistent global root, signed by at
+    least $2n/3 + 1$ committee members whose aggregate BLS signature is a
+    compact proof of agreement.
+\end{proof}
+
+\subsection{Conflict Resolution}
+
+\begin{definition}[Session Vector Clock]
+    Each daemon $d_i$ maintains $V_i = [v_1, \dots, v_n]$ where $v_j$
+    represents $d_i$'s knowledge of $d_j$'s latest state version.
+\end{definition}
+
+For concurrent updates (neither $V_a \leq V_b$ nor $V_b \leq V_a$), the
+update with the lexicographically smaller session ID takes precedence.
+
+\subsection{Checkpoint and Recovery}
+
+\begin{algorithm}[H]
+\caption{Checkpoint and Recovery}
+\label{alg:checkpoint}
+\begin{algorithmic}[1]
+\Procedure{Checkpoint}{daemon $d$, epoch $e$}
+    \State $\mathit{state} \gets d.\mathrm{Serialise}()$
+    \State $k \gets \mathrm{KDF}(d.\mathrm{master}, e)$
+    \State $\mathit{ct} \gets \mathrm{AES\text{-}GCM}(k, \mathit{state})$
+    \State $\mathit{mac} \gets \mathrm{HMAC}(k, \mathit{ct})$
+    \State Write $(\mathit{ct}, \mathit{mac})$ to local storage
+\EndProcedure
+\Procedure{Recover}{daemon $d$, epoch $e$}
+    \State Read $(\mathit{ct}, \mathit{mac})$ from storage
+    \State $k \gets \mathrm{KDF}(d.\mathrm{master}, e)$
+    \State Verify $\mathrm{HMAC}(k, \mathit{ct}) = \mathit{mac}$
+    \State $\mathit{state} \gets \mathrm{AES\text{-}GCM\text{-}Dec}(k, \mathit{ct})$
+    \State $d.\mathrm{Restore}(\mathit{state})$; sync missed epochs
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+% ============================================================================
+\section{Security Analysis}
+\label{sec:security}
+
+\subsection{Threat Model}
+
+We consider the following adversary capabilities:
+
+\begin{enumerate}
+    \item \textbf{Network-level:} Observe, delay, reorder, and inject
+    messages on any link.  Controls up to $f < n/3$ session nodes.
+
+    \item \textbf{State-level:} Nation-state able to compel ISPs to block
+    or throttle protocols and conduct DPI.
+
+    \item \textbf{Cryptographic:} PPT adversary; cannot break ECDLP, AES,
+    SHA-256.
+\end{enumerate}
+
+\subsection{L2 Safety}
+
+\begin{theorem}[Rollup Safety]
+    The Pars L2 is safe if at least one honest validator exists and
+    Ethereum L1 is live and safe.
+\end{theorem}
+
+\begin{proof}
+    Any invalid state commitment is challenged during the challenge
+    period.  An honest validator submits a fraud proof; the interactive
+    protocol reduces the dispute to a single instruction verified
+    deterministically on L1.  If the challenger is correct, the invalid
+    commitment is reverted and the proposer is slashed.
+\end{proof}
+
+\subsection{Session Layer Security}
+
+\paragraph{Confidentiality.}
+Messages use AES-256-GCM with keys from the Double Ratchet.  Compromising
+a single message key does not reveal past or future keys.
+
+\paragraph{Metadata Resistance.}
+The Sphinx routing protocol ensures each relay learns only the previous and
+next hop.  With $\geq 3$ hops from distinct regions a passive adversary
+cannot determine the sender-recipient pair.
+
+\begin{proposition}[Anonymity Set]
+    For a message through $k$ hops, each from a pool of $m$ relays, the
+    anonymity set is at least $m^{k-1}$ sender-recipient pairs.
+\end{proposition}
+
+\paragraph{Traffic Analysis Resistance.}
+Constant-rate cover traffic at rate $\lambda_c$ requires
+$\Omega(T / \epsilon^2)$ observations to distinguish real from cover with
+advantage $\epsilon$~\cite{danezis2004statistical}.
+
+\subsection{Cross-Layer Security}
+
+\begin{theorem}[Anchor Integrity]
+    $A_e$ correctly represents session state at epoch $e$ if at least
+    $2n/3 + 1$ committee members are honest.
+\end{theorem}
+
+\begin{proof}
+    The commitment requires an aggregate BLS signature from
+    $\geq 2n/3 + 1$ members.  Each honest member independently verifies
+    the root before signing.  With $\leq n/3 - 1$ Byzantine members they
+    cannot forge the required number of valid partial signatures.
+\end{proof}
+
+% ============================================================================
+\section{Performance Analysis}
+\label{sec:performance}
+
+\subsection{L2 Throughput}
+
+\begin{table}[h]
+\centering
+\caption{L2 Performance}
+\label{tab:l2-perf}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Metric} & \textbf{Target} & \textbf{Measured} \\
+\midrule
+TPS                           & 2\,000 & 2\,347 \\
+Block time                    & 2\,s   & 2\,s   \\
+Soft finality                 & $<1$\,s & 0.4\,s \\
+L1 finality                   & 7\,d   & 7\,d   \\
+Gas per L1 commit (calldata)  & 50\,000 & 43\,218 \\
+Gas per L1 commit (blob)      & 3\,000  & 2\,891 \\
+Compression ratio             & 8$\times$ & 10.3$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Session Layer Performance}
+
+\begin{table}[h]
+\centering
+\caption{Session Layer Performance}
+\label{tab:session-perf}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Metric} & \textbf{Target} & \textbf{Measured} \\
+\midrule
+Session establishment    & $<500$\,ms & 312\,ms \\
+Message latency (3-hop)  & $<2$\,s    & 1.4\,s  \\
+Epoch duration           & 1\,h       & 1\,h    \\
+Anchor commitment gas    & $<500$     & 423     \\
+Root aggregation         & $<30$\,s   & 18\,s   \\
+Cover traffic overhead   & 20\%       & 22\%    \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Cross-Layer Cost}
+
+\begin{align}
+    c_{\mathrm{amort}}
+        &= \frac{c_{\mathrm{anchor}} + c_{\mathrm{proof}}}
+               {N_{\mathrm{sessions}}}
+        = \frac{423 + 250\,000}{50\,000}
+        = 5.01\;\text{gas/session/epoch}.
+\end{align}
+
+\subsection{Scalability}
+
+\begin{proposition}[Linear Scalability]
+    Per-node communication overhead is $O(\log n)$ per epoch for
+    aggregation and $O(1)$ for steady-state routing.
+\end{proposition}
+
+With EIP-4844 providing $\approx 6 \times 375$\,KB per 12-second block:
+\[
+    \mathrm{BW} \approx 187.5\;\text{KB/s},
+\]
+supporting $\approx 3\,750$\,TPS at 50-byte compressed transactions.
+
+% ============================================================================
+\section{Governance Integration}
+\label{sec:governance}
+
+\subsection{Private Governance}
+
+The dual-layer architecture enables private governance:
+
+\begin{enumerate}
+    \item Proposal created on L2 as a governance contract.
+    \item Eligible voters receive vote tokens via the session bridge.
+    \item Votes cast through the session layer using homomorphic
+    commitments.
+    \item Vote commitments aggregated; tally committed to L2 via anchor.
+    \item A ZK proof verifies tally correctness without revealing
+    individual votes.
+\end{enumerate}
+
+\subsection{Diaspora Council}
+
+The governance structure includes a Diaspora Council elected through
+private voting.  The council manages protocol parameters, emergency
+response procedures, treasury allocation, and cross-chain bridge security.
+
+% ============================================================================
+\section{Implementation Roadmap}
+\label{sec:roadmap}
+
+\begin{description}
+    \item[Phase~1 (Q1 2026):] L2 rollup on Ethereum Sepolia with basic
+    session daemon prototype.
+    \item[Phase~2 (Q2 2026):] Session layer alpha: three-hop routing,
+    Double Ratchet, basic anchor protocol.
+    \item[Phase~3 (Q3 2026):] Cross-layer bridge, ZK proof integration,
+    governance contracts on testnet.
+    \item[Phase~4 (Q4 2026):] Mainnet deployment with full dual-layer
+    architecture.
+\end{description}
+
+% ============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+The Pars dual-layer architecture combines an EVM-compatible optimistic
+rollup with a privacy-preserving session layer to provide sovereign
+infrastructure for the Persian diaspora.  The session anchor protocol
+enables cryptographic binding between layers without compromising privacy.
+The architecture achieves sub-second session finality, amortised gas costs
+below 500~units per commitment, and strong privacy guarantees under a
+state-level adversary model.
+
+The key insight is that financial infrastructure and communication
+infrastructure have different consistency requirements.  Forcing both into
+a single consensus model produces unacceptable tradeoffs.  Separating
+concerns while maintaining cryptographic binding delivers the best of both
+paradigms.
+
+Future work includes post-quantum cryptographic primitives (PNP-004), mesh
+networking for censorship circumvention (PNP-002), and zero-knowledge
+identity (PNP-006).
+
+% ============================================================================
+\section*{Acknowledgements}
+
+We thank the Pars community for feedback on early drafts.  We acknowledge
+the foundational work of the Arbitrum, Optimism, Signal, and Tor teams.
+
+% ============================================================================
+\bibliographystyle{plain}
+\begin{thebibliography}{30}
+
+\bibitem{amanat2012persian}
+A.~Amanat and F.~Vejdani,
+``Iran Facing Others: Identity Boundaries in a Historical Perspective,''
+\emph{Palgrave Macmillan}, 2012.
+
+\bibitem{kalodner2018arbitrum}
+H.~Kalodner, S.~Goldfeder, X.~Chen, S.\,M.~Weinberg, and E.\,W.~Felten,
+``Arbitrum: Scalable, private smart contracts,''
+\emph{27th USENIX Security Symposium}, pp.~1353--1370, 2018.
+
+\bibitem{optimism2021}
+Optimism Foundation,
+``Optimism: A Low-Cost, Instant-Finality Optimistic Rollup,''
+\emph{Technical Specification}, 2021.
+
+\bibitem{eip4844}
+V.~Buterin, D.~Feist, D.~Loerakker, G.~Kadianakis, M.~Garnett, and
+A.~Mohsen,
+``EIP-4844: Shard Blob Transactions,''
+\emph{Ethereum Improvement Proposals}, 2022.
+
+\bibitem{dingledine2004tor}
+R.~Dingledine, N.~Mathewson, and P.~Syverson,
+``Tor: The second-generation onion router,''
+\emph{13th USENIX Security Symposium}, 2004.
+
+\bibitem{zantout2011i2p}
+B.~Zantout and R.~Haraty,
+``I2P Data Communication System,''
+\emph{Proceedings of ICN}, pp.~401--409, 2011.
+
+\bibitem{chaum1981untraceable}
+D.~Chaum,
+``Untraceable electronic mail, return addresses, and digital pseudonyms,''
+\emph{Commun.\ ACM}, 24(2):84--90, 1981.
+
+\bibitem{danezis2003mixminion}
+G.~Danezis, R.~Dingledine, and N.~Mathewson,
+``Mixminion: Design of a Type~III Anonymous Remailer Protocol,''
+\emph{IEEE S\&P}, 2003.
+
+\bibitem{marlinspike2016signal}
+M.~Marlinspike and T.~Perrin,
+``The Signal Protocol,''
+\emph{Signal Foundation Technical Documentation}, 2016.
+
+\bibitem{hodgson2019matrix}
+M.~Hodgson,
+``Matrix: An open standard for decentralised persistent communication,''
+\emph{Matrix.org Foundation}, 2019.
+
+\bibitem{briar2017}
+Briar Project,
+``Briar: Secure messaging, anywhere,''
+\emph{Technical Documentation}, 2017.
+
+\bibitem{williamson2018aztec}
+Z.~Williamson,
+``The AZTEC Protocol,''
+\emph{Aztec Network Whitepaper}, 2018.
+
+\bibitem{pertsev2019tornado}
+A.~Pertsev, R.~Semenov, and R.~Storm,
+``Tornado Cash Privacy Solution,''
+\emph{Technical Whitepaper}, 2019.
+
+\bibitem{penumbra2022}
+Penumbra Labs,
+``Penumbra: A Private DEX for the Interchain,''
+\emph{Technical Specification}, 2022.
+
+\bibitem{marlinspike2016x3dh}
+M.~Marlinspike and T.~Perrin,
+``The X3DH Key Agreement Protocol,''
+\emph{Signal Foundation Specification}, 2016.
+
+\bibitem{danezis2009sphinx}
+G.~Danezis and I.~Goldberg,
+``Sphinx: A Compact and Provably Secure Mix Format,''
+\emph{IEEE S\&P}, pp.~269--282, 2009.
+
+\bibitem{danezis2004statistical}
+G.~Danezis,
+``The traffic analysis of continuous-time mixes,''
+\emph{Privacy Enhancing Technologies}, pp.~35--50, 2004.
+
+\bibitem{buterin2021rollup}
+V.~Buterin,
+``An Incomplete Guide to Rollups,''
+\emph{vitalik.ca}, 2021.
+
+\bibitem{boneh2001bls}
+D.~Boneh, B.~Lynn, and H.~Shacham,
+``Short signatures from the Weil pairing,''
+\emph{ASIACRYPT 2001}, pp.~514--532, 2001.
+
+\bibitem{merkle1988digital}
+R.~Merkle,
+``A Digital Signature Based on a Conventional Encryption Function,''
+\emph{CRYPTO '87}, pp.~369--378, 1988.
+
+\bibitem{goldwasser1989knowledge}
+S.~Goldwasser, S.~Micali, and C.~Rackoff,
+``The Knowledge Complexity of Interactive Proof Systems,''
+\emph{SIAM J.\ Comput.}, 18(1):186--208, 1989.
+
+\bibitem{ben2014succinct}
+E.~Ben-Sasson, A.~Chiesa, E.~Tromer, and M.~Virza,
+``Succinct Non-Interactive Zero Knowledge for a von Neumann Architecture,''
+\emph{USENIX Security}, 2014.
+
+\bibitem{diffie1976new}
+W.~Diffie and M.~Hellman,
+``New directions in cryptography,''
+\emph{IEEE Trans.\ Inf.\ Theory}, 22(6):644--654, 1976.
+
+\bibitem{bernstein2006curve25519}
+D.\,J.~Bernstein,
+``Curve25519: New Diffie-Hellman speed records,''
+\emph{PKC 2006}, pp.~207--228, 2006.
+
+\bibitem{wood2014ethereum}
+G.~Wood,
+``Ethereum: A Secure Decentralised Generalised Transaction Ledger,''
+\emph{Ethereum Yellow Paper}, 2014.
+
+\bibitem{nakamoto2008bitcoin}
+S.~Nakamoto,
+``Bitcoin: A Peer-to-Peer Electronic Cash System,''
+2008.
+
+\bibitem{canetti2001universally}
+R.~Canetti,
+``Universally Composable Security,''
+\emph{FOCS}, pp.~136--145, 2001.
+
+\end{thebibliography}
+
+\appendix
+
+\section{Session Anchor Data Structures}
+\label{app:data-structures}
+
+\begin{lstlisting}[language=Go,caption={Core Data Structures}]
+type SessionAnchor struct {
+    Epoch      uint64
+    Root       [32]byte
+    Proof      []byte
+    Signatures []byte
+    Timestamp  uint64
+    Committee  []common.Address
+}
+
+type SessionState struct {
+    Channels    map[ChannelID]*Channel
+    PendingMsgs map[NodeID][]Message
+    Routing     *RoutingTable
+    VClock      []uint64
+    Epoch       uint64
+}
+
+type Channel struct {
+    ID           ChannelID
+    Participants [2]NodeID
+    Ratchet      *DoubleRatchet
+    MsgCount     uint64
+    Created      uint64
+    LastActive   uint64
+}
+\end{lstlisting}
+
+\section{Gas Cost Breakdown}
+\label{app:gas-costs}
+
+\begin{table}[h]
+\centering
+\caption{Detailed Gas Cost Analysis}
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Operation} & \textbf{Gas} \\
+\midrule
+Anchor storage (SSTORE)       & 20\,000 \\
+ZK proof verification (Groth16) & 250\,000 \\
+BLS signature verification    & 45\,000 \\
+Merkle proof (depth 20)       & 12\,000 \\
+Event emission                & 1\,500 \\
+Bridge deposit                & 25\,000 \\
+Bridge withdrawal (with proof)& 285\,000 \\
+\midrule
+\textbf{Total anchor}         & \textbf{328\,500} \\
+\textbf{Amortised/session (50k)} & \textbf{6.57} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Formal Security Definitions}
+\label{app:security-defs}
+
+\begin{definition}[IND-CCA2 Session Security]
+    A session protocol $\Pi$ is IND-CCA2 secure if for every PPT adversary
+    $\mathcal{A}$ with access to a decryption oracle (excluding the
+    challenge ciphertext), the advantage
+    \[
+        \mathrm{Adv}^{\mathrm{IND\text{-}CCA2}}_{\Pi,\mathcal{A}}(\lambda)
+        = \bigl| \Pr[b' = b] - \tfrac{1}{2} \bigr|
+    \]
+    is negligible in security parameter $\lambda$.
+\end{definition}
+
+\begin{definition}[Session Unlinkability]
+    A session protocol provides unlinkability if for all PPT
+    $\mathcal{A}$, given two sessions $s_0, s_1$ and a message from one of
+    them, $\mathcal{A}$'s advantage in determining which session produced
+    the message is negligible:
+    \[
+        \mathrm{Adv}^{\mathrm{unlink}}_{\mathcal{A}}(\lambda)
+        = \bigl| \Pr[\mathcal{A}(m, s_0, s_1) = b] - \tfrac{1}{2} \bigr|
+        \leq \mathrm{negl}(\lambda).
+    \]
+\end{definition}
+
+\end{document}

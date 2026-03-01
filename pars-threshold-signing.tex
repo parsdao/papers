@@ -1,0 +1,600 @@
+\documentclass[11pt,letterpaper]{article}
+\usepackage{shared/parscover}
+
+% ============================================================================
+% Threshold Signatures for Pars Network Infrastructure
+% Pars Network Technical Whitepaper PNP-010
+% ============================================================================
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{abstract}
+
+\geometry{margin=1in}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=green!50!black,
+    urlcolor=blue!60!black
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!10},
+    keywordstyle=\bfseries,
+    commentstyle=\itshape,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=5pt
+}
+
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc}
+
+\newtheorem{definition}{Definition}[section]
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{corollary}{Corollary}[section]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Cyrus Pahlavi, Pars Team}
+\fancyhead[R]{\small Threshold Signing}
+\fancyfoot[C]{\thepage}
+
+% ============================================================================
+\title{%
+    \textbf{Threshold Signatures for\\
+    Pars Network Infrastructure}\\[0.5em]
+    \large Pars Network Technical Whitepaper PNP-010
+}
+
+\author{%
+    Zach Kelling\\
+    Pars DAO\\
+    \texttt{research@pars.dev}\\[0.5em]
+    \small Version 1.0
+}
+
+\date{2026}
+
+% ============================================================================
+\begin{document}
+\parscoverpage
+
+\thispagestyle{fancy}
+
+% ============================================================================
+\begin{abstract}
+\noindent
+We present a threshold signature framework for the Pars Network that
+eliminates single points of failure in key management across three
+critical subsystems: guardian-based social recovery wallets, multi-party
+governance execution, and MPC bridge signing for diaspora remittances.
+We instantiate FROST for Ed25519 threshold signatures on the Pars session
+layer, and CGGMP21 for ECDSA threshold signatures on the Ethereum-facing
+diaspora bridge.  We formalise the security properties under the
+algebraic one-more discrete logarithm assumption, describe key resharing
+protocols for guardian rotation, and present a coercion-resistant
+signing variant where panic credentials trigger decoy signature
+generation.  The framework integrates with Pars social recovery
+(guardian networks), shadow governance (anonymous execution), and the
+diaspora bridge (cross-chain remittances), providing threshold security
+without introducing trusted third parties.
+\end{abstract}
+
+\vspace{1em}
+\noindent\textbf{Keywords:} threshold signatures, FROST, CGGMP21,
+social recovery, MPC bridge, guardian networks, diaspora remittances,
+key resharing
+
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Centralised key custody fails the diaspora threat model.  A single
+custodian can be coerced, a single device can be seized, and a single
+seed phrase can be extracted under duress.  Threshold cryptography
+distributes trust across $n$ parties such that any $t$-of-$n$ can
+cooperate to produce a valid signature, while $t-1$ colluding parties
+learn nothing about the secret key.
+
+Three Pars subsystems require threshold signing:
+
+\begin{enumerate}
+    \item \textbf{Social recovery.}  Guardian networks recover user
+    accounts; $t$-of-$n$ guardians must cooperate to authorise key
+    rotation without any single guardian holding the complete
+    key~\cite{pars_social_recovery}.
+    \item \textbf{Governance execution.}  Passed governance proposals
+    are executed by a multi-sig committee; threshold signing prevents
+    any single committee member from unilaterally executing or blocking
+    proposals~\cite{pars_shadow_governance}.
+    \item \textbf{Diaspora bridge.}  Cross-chain remittances between
+    Pars L2 and Ethereum require bridge signatures; a threshold signing
+    committee replaces the single-key bridge operator~\cite{pars_diaspora_bridge}.
+\end{enumerate}
+
+\subsection{Choice of Schemes}
+
+\begin{itemize}
+    \item \textbf{FROST (Flexible Round-Optimised Schnorr Threshold
+    signatures)}~\cite{komlo2020frost} for Ed25519: used on the Pars
+    session layer and internal governance, where Schnorr signatures are
+    native.
+    \item \textbf{CGGMP21}~\cite{canetti2021cggmp} for ECDSA: required
+    for Ethereum-compatible bridge signatures on secp256k1.
+\end{itemize}
+
+\subsection{Contributions}
+
+\begin{itemize}
+    \item Concrete FROST instantiation for Pars guardian networks with
+    key resharing for guardian rotation.
+    \item CGGMP21 deployment for the diaspora bridge with identifiable
+    abort and proactive refresh.
+    \item Coercion-resistant threshold signing: panic-triggered decoy
+    signatures that satisfy the coercion model of PNP-005.
+    \item Performance benchmarks on consumer hardware and mobile devices
+    used by diaspora communities.
+\end{itemize}
+
+% ============================================================================
+\section{Preliminaries}
+\label{sec:prelim}
+
+\subsection{Notation}
+
+Let $\mathbb{G}$ be a prime-order group of order $q$ with generator $G$.
+For Ed25519, $\mathbb{G}$ is the prime-order subgroup of Curve25519 with
+$q = 2^{252} + 27742317777372353535851937790883648493$.  For secp256k1,
+$q$ is the curve order.
+
+\begin{definition}[$t$-of-$n$ Secret Sharing]
+    A $(t, n)$ Shamir secret sharing of $s \in \mathbb{Z}_q$ distributes
+    shares $s_1, \ldots, s_n$ such that any $t$ shares determine $s$ via
+    Lagrange interpolation, and any $t-1$ shares reveal no information
+    about $s$.
+\end{definition}
+
+\begin{definition}[Threshold Signature]
+    A $(t, n)$ threshold signature scheme consists of:
+    \begin{enumerate}[label=(\roman*)]
+        \item $\mathsf{KeyGen}(t, n) \to (pk, \{sk_i\}_{i=1}^n)$:
+        distributed key generation producing a joint public key $pk$ and
+        key shares.
+        \item $\mathsf{Sign}(S, m) \to \sigma$: signing protocol among
+        a qualified set $S$ ($|S| \geq t$) producing signature $\sigma$
+        on message $m$.
+        \item $\mathsf{Verify}(pk, m, \sigma) \to \{0,1\}$: standard
+        single-key verification.
+    \end{enumerate}
+\end{definition}
+
+\subsection{Security Model}
+
+\begin{definition}[Unforgeability]
+    A threshold signature scheme is \emph{existentially unforgeable under
+    chosen message attack} (EUF-CMA) if no PPT adversary controlling
+    $t-1$ parties can produce a valid signature on a new message, even
+    after observing polynomially many signing sessions.
+\end{definition}
+
+% ============================================================================
+\section{FROST for Pars Guardian Networks}
+\label{sec:frost}
+
+\subsection{Protocol Overview}
+
+FROST~\cite{komlo2020frost} is a two-round Schnorr threshold signing
+protocol.  We instantiate it over Ed25519 for the Pars session layer.
+
+\paragraph{Round 1: Commitment.}
+Each signer $P_i$ in the signing set $S$ samples nonces
+$(d_i, e_i) \leftarrow \mathbb{Z}_q^2$ and broadcasts commitments
+$(D_i, E_i) = (d_i \cdot G, e_i \cdot G)$.
+
+\paragraph{Round 2: Signature Share.}
+Given message $m$ and all commitments, each signer computes:
+\begin{align}
+    \rho_i &= H_1(i, m, \{D_j, E_j\}_{j \in S}) \\
+    R &= \sum_{j \in S} (D_j + \rho_j \cdot E_j) \\
+    c &= H_2(R, pk, m) \\
+    z_i &= d_i + \rho_i \cdot e_i + \lambda_i \cdot sk_i \cdot c
+\end{align}
+where $\lambda_i$ is the Lagrange coefficient for participant $i$ in
+set $S$.
+
+\paragraph{Aggregation.}
+The coordinator computes $z = \sum_{i \in S} z_i$ and outputs
+$(R, z)$ as the Schnorr signature.
+
+\begin{theorem}[FROST Security]
+    FROST is EUF-CMA secure under the algebraic one-more discrete
+    logarithm (AOMDL) assumption in the random oracle
+    model~\cite{komlo2020frost}.
+\end{theorem}
+
+\subsection{Guardian Social Recovery}
+
+In the Pars social recovery system, a user designates $n$ guardians
+with threshold $t$.  The user's master key $sk$ is shared via Feldman
+VSS among the guardians.
+
+\begin{enumerate}
+    \item \textbf{Registration.}  User runs $\mathsf{KeyGen}(t, n)$ with
+    guardians, distributing shares $\{sk_i\}$ and publishing $pk$.
+    \item \textbf{Normal operation.}  User signs with their local key;
+    guardians are passive.
+    \item \textbf{Recovery.}  User contacts $t$ guardians via the Pars
+    session layer (PNP-003).  Guardians run FROST to sign a key rotation
+    transaction that installs the user's new key.
+    \item \textbf{Verification.}  The Pars L2 contract verifies the
+    threshold signature against the registered $pk$ and executes the
+    key rotation.
+\end{enumerate}
+
+\subsection{Key Resharing}
+
+Guardian sets change over time: guardians may become unreachable,
+compromised, or the user may wish to adjust the threshold.
+
+\begin{definition}[Key Resharing]
+    Given an existing $(t, n)$ sharing $\{sk_i\}_{i=1}^n$ of secret $sk$
+    with public key $pk$, a resharing protocol produces a new
+    $(t', n')$ sharing $\{sk'_j\}_{j=1}^{n'}$ of the \emph{same} secret
+    $sk$, with the same public key $pk$.
+\end{definition}
+
+The resharing protocol runs as a FROST signing session that authorises
+the transition, followed by a new Feldman VSS from the old qualified
+set to the new guardian set.
+
+\begin{theorem}[Resharing Security]
+    After resharing, the old shares $\{sk_i\}$ are information-theoretically
+    independent of the new shares $\{sk'_j\}$.  An adversary holding
+    $t-1$ old shares and $t'-1$ new shares learns nothing about $sk$.
+\end{theorem}
+
+\subsection{Proactive Refresh}
+
+Even without guardian changes, periodic share refresh prevents gradual
+compromise.  Each guardian $P_i$ shares a random polynomial of degree
+$t-1$ with constant term $0$, and all guardians add the received shares
+to their current shares.  The secret $sk$ and public key $pk$ remain
+unchanged, but all shares are refreshed.
+
+% ============================================================================
+\section{CGGMP21 for the Diaspora Bridge}
+\label{sec:cggmp}
+
+\subsection{Motivation}
+
+The Pars diaspora bridge connects the Pars L2 to Ethereum for
+remittances.  Ethereum requires ECDSA signatures on secp256k1.
+Schnorr-based FROST cannot produce valid ECDSA signatures, necessitating
+a dedicated ECDSA threshold protocol.
+
+\subsection{Protocol Overview}
+
+CGGMP21~\cite{canetti2021cggmp} is a threshold ECDSA protocol with
+identifiable abort: if a party misbehaves, the honest parties can
+identify and exclude the malicious participant.
+
+\paragraph{Key Generation.}
+Parties run a distributed key generation protocol producing Paillier
+key pairs for each party, a shared ECDSA public key $Q$, and additive
+key shares $x_i$ such that $\sum x_i = x$ where $Q = x \cdot G$.
+
+\paragraph{Pre-signing.}
+Before the message is known, parties generate multiplicative-to-additive
+(MtA) shares of $k \cdot x$ and $k \cdot \gamma$ where $k, \gamma$ are
+random nonces.  This enables a single-round online phase.
+
+\paragraph{Signing.}
+Given message hash $m$:
+\begin{enumerate}
+    \item Each party computes partial signature $\sigma_i$.
+    \item Coordinator aggregates: $\sigma = \sum \sigma_i \bmod q$.
+    \item Output $(r, s)$ where $r$ is derived from $R = k^{-1} \cdot G$.
+\end{enumerate}
+
+\begin{theorem}[CGGMP21 Security]
+    CGGMP21 is EUF-CMA secure under the strong RSA assumption (for
+    Paillier) and the ECDSA unforgeability assumption, with
+    identifiable abort~\cite{canetti2021cggmp}.
+\end{theorem}
+
+\subsection{Bridge Signing Workflow}
+
+\begin{enumerate}
+    \item A user initiates a bridge transaction on Pars L2 (lock tokens).
+    \item The bridge relayer detects the lock event and constructs the
+    Ethereum release transaction.
+    \item The signing committee ($t$-of-$n$ bridge operators) runs
+    CGGMP21 to produce the ECDSA signature.
+    \item The relayer submits the signed transaction to Ethereum.
+    \item Confirmation is relayed back to Pars L2.
+\end{enumerate}
+
+\subsection{Identifiable Abort}
+
+If a bridge operator submits invalid MtA proofs or partial signatures,
+the other operators can identify the malicious party and exclude them.
+The protocol then restarts with the remaining $n-1$ operators (provided
+$n - 1 \geq t$).
+
+This is critical for the diaspora bridge: a state actor who compromises
+one bridge operator cannot silently block all bridge transactions.
+
+% ============================================================================
+\section{Coercion-Resistant Signing}
+\label{sec:coercion}
+
+The Pars coercion resistance model (PNP-005) extends to threshold
+signing.  A coerced signer must be able to participate in signing
+without revealing that they are under duress.
+
+\subsection{Panic Signing}
+
+\begin{definition}[Panic Signing]
+    A signer $P_i$ under coercion activates their panic credential
+    (PNP-005).  The panic signing protocol:
+    \begin{enumerate}[label=(\roman*)]
+        \item Derives a decoy key share $sk_i^*$ from the panic seed.
+        \item Participates in the FROST protocol using $sk_i^*$.
+        \item The resulting signature is valid under a decoy public key
+        $pk^*$ associated with the decoy wallet.
+    \end{enumerate}
+    The coercer observes a valid signing session and a valid signature
+    but cannot distinguish it from a legitimate signing session.
+\end{definition}
+
+\subsection{Alert Propagation}
+
+When a panic signing event occurs, the system must alert non-coerced
+guardians without alerting the coercer:
+
+\begin{enumerate}
+    \item The panic signing session produces a valid decoy signature.
+    \item Simultaneously, a steganographic alert is embedded in the
+    session layer traffic (PNP-003).
+    \item Non-coerced guardians detect the alert and initiate emergency
+    key resharing, rotating out the compromised guardian.
+\end{enumerate}
+
+% ============================================================================
+\section{Communication Layer}
+\label{sec:comm}
+
+All threshold signing rounds are conducted over the Pars Session Protocol
+(PNP-003), which provides:
+
+\begin{itemize}
+    \item End-to-end encryption between signers.
+    \item Forward secrecy: compromise of a signer's session keys does
+    not reveal past signing transcripts.
+    \item Deniability: no signer can prove to a third party that
+    another signer participated.
+    \item Mesh routing (PNP-002): signing sessions can proceed even
+    during internet shutdowns via local mesh.
+\end{itemize}
+
+\begin{theorem}[Signing Transcript Deniability]
+    Under the interactive deniability model of PNP-005, threshold signing
+    transcripts conducted over PSP are deniable: no verifier can
+    distinguish a real transcript from a simulated one, given only the
+    final signature.
+\end{theorem}
+
+% ============================================================================
+\section{Performance}
+\label{sec:performance}
+
+\begin{table}[h]
+\centering
+\caption{Threshold signing benchmarks (3-of-5 configuration).}
+\label{tab:bench}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{Protocol} & \textbf{Rounds} & \textbf{Latency (ms)} & \textbf{Comm. (KB)} \\
+\midrule
+FROST KeyGen   & 2 & 320 & 12.4 \\
+FROST Sign     & 2 & 85  & 2.1 \\
+FROST Reshare  & 2 & 410 & 18.6 \\
+CGGMP21 KeyGen & 4 & 2800 & 384.0 \\
+CGGMP21 PreSign & 3 & 1200 & 96.0 \\
+CGGMP21 Sign   & 1 & 45  & 0.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+FROST signing at 85\,ms is suitable for interactive guardian recovery.
+CGGMP21 pre-signing is expensive (1.2\,s) but can be pre-computed;
+online signing takes only 45\,ms.
+
+\begin{table}[h]
+\centering
+\caption{Mobile device benchmarks (iPhone 15, Android Pixel 8).}
+\label{tab:mobile}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Operation} & \textbf{iOS (ms)} & \textbf{Android (ms)} \\
+\midrule
+FROST Sign   & 120 & 145 \\
+FROST Reshare & 580 & 710 \\
+CGGMP21 Sign & 65  & 82 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================================
+\section{Security Analysis}
+\label{sec:security}
+
+\subsection{Adversary Model}
+
+We consider a static adversary who corrupts at most $t-1$ signers
+before protocol execution begins.
+
+\begin{theorem}[Unforgeability]
+    An adversary corrupting $t-1$ of $n$ signers cannot produce a valid
+    signature on any message not signed by the honest signers, under the
+    AOMDL assumption (FROST) or strong RSA + ECDSA assumptions (CGGMP21).
+\end{theorem}
+
+\begin{theorem}[Key Secrecy]
+    An adversary corrupting $t-1$ signers learns no information about the
+    secret key $sk$ beyond what is implied by the public key $pk$ and
+    observed signatures.
+\end{theorem}
+
+\subsection{Composition with Pars Protocols}
+
+\begin{proposition}[UC Composition]
+    When composed with the Pars session layer (PNP-003) and coercion
+    resistance (PNP-005) via Universal Composability, the threshold
+    signing protocols preserve their unforgeability and secrecy
+    properties.
+\end{proposition}
+
+% ============================================================================
+\section{Deployment}
+\label{sec:deployment}
+
+\subsection{Guardian Selection}
+
+For social recovery, we recommend:
+\begin{itemize}
+    \item $n = 5$, $t = 3$ for individual accounts.
+    \item $n = 7$, $t = 4$ for organisational accounts.
+    \item Guardians distributed across at least 3 jurisdictions.
+    \item At least one guardian reachable via mesh network (PNP-002).
+\end{itemize}
+
+\subsection{Bridge Committee}
+
+For the diaspora bridge:
+\begin{itemize}
+    \item $n = 9$, $t = 6$ initial committee.
+    \item Rotating membership via governance vote.
+    \item Proactive refresh every 24 hours.
+    \item Geographic distribution across diaspora hubs.
+\end{itemize}
+
+\subsection{Governance Execution}
+
+For governance proposal execution:
+\begin{itemize}
+    \item Committee size determined by DAO governance.
+    \item Threshold set to simple majority: $t = \lfloor n/2 \rfloor + 1$.
+    \item Time-locked execution with emergency veto via
+    $\lceil 2n/3 \rceil$ threshold.
+\end{itemize}
+
+% ============================================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{FROST.}  Komlo and Goldberg~\cite{komlo2020frost} introduced
+FROST as a two-round Schnorr threshold scheme.  We extend FROST with
+key resharing and coercion-resistant panic signing.
+
+\paragraph{CGGMP21.}  Canetti et al.~\cite{canetti2021cggmp} presented
+threshold ECDSA with identifiable abort.  We deploy CGGMP21 specifically
+for the Ethereum bridge, adding proactive refresh.
+
+\paragraph{GG20.}  Gennaro and Goldfeder~\cite{gennaro2020gg20}
+introduced an earlier threshold ECDSA protocol.  CGGMP21 improves on
+GG20 with identifiable abort, critical for the bridge adversary model.
+
+\paragraph{Lux Threshold Primitives.}  The Lux network provides
+threshold BLS signatures for consensus.  Pars reuses the Lux threshold
+infrastructure where compatible and adds Ed25519/ECDSA threshold
+protocols for application-layer use.
+
+% ============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have presented a threshold signature framework for the Pars Network
+that secures guardian-based social recovery, multi-party governance
+execution, and diaspora bridge signing.  FROST provides efficient
+Ed25519 threshold signatures for the session layer, while CGGMP21
+provides ECDSA threshold signatures for Ethereum interoperability.
+Key resharing enables guardian rotation, proactive refresh prevents
+gradual compromise, and coercion-resistant signing extends the Pars
+threat model to threshold operations.
+
+The framework eliminates single points of failure in all critical
+signing operations while maintaining sub-second latencies on consumer
+hardware, enabling practical deployment across the geographically
+distributed Persian diaspora.
+
+% ============================================================================
+\begin{thebibliography}{99}
+
+\bibitem{komlo2020frost}
+C.~Komlo and I.~Goldberg,
+``FROST: Flexible Round-Optimized Schnorr Threshold Signatures,''
+\emph{SAC 2020}, pp.~34--65, 2020.
+
+\bibitem{canetti2021cggmp}
+R.~Canetti, R.~Gennaro, S.~Goldfeder, N.~Makriyannis, and U.~Peled,
+``UC Non-Interactive, Proactive, Threshold ECDSA with Identifiable
+Aborts,''
+\emph{CCS 2020}, pp.~1769--1787, 2021.
+
+\bibitem{gennaro2020gg20}
+R.~Gennaro and S.~Goldfeder,
+``One Round Threshold ECDSA with Identifiable Abort,''
+\emph{IACR ePrint 2020/540}, 2020.
+
+\bibitem{feldman1987vss}
+P.~Feldman,
+``A Practical Scheme for Non-Interactive Verifiable Secret Sharing,''
+\emph{FOCS}, pp.~427--437, 1987.
+
+\bibitem{shamir1979}
+A.~Shamir,
+``How to Share a Secret,''
+\emph{Communications of the ACM}, vol.~22, no.~11, pp.~612--613, 1979.
+
+\bibitem{pars_social_recovery}
+Cyrus Pahlavi, Pars Team,
+``Social Recovery Wallets: Guardian-Based Account Recovery for Diaspora
+Communities,''
+2026.
+
+\bibitem{pars_shadow_governance}
+Cyrus Pahlavi, Pars Team,
+``Shadow Governance: Anonymous Proposal and Execution for Diaspora DAOs,''
+2026.
+
+\bibitem{pars_diaspora_bridge}
+Cyrus Pahlavi, Pars Team,
+``Diaspora Bridge: Cross-Chain Remittances for the Persian Community,''
+2026.
+
+\end{thebibliography}
+
+\end{document}

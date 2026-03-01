@@ -1,0 +1,995 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{shared/parscover}
+
+% ============================================================================
+% Zero-Knowledge Identity: Privacy-Preserving Authentication
+% Pars Network Technical Whitepaper PNP-006
+% ============================================================================
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{listings}
+\input{shared/lstlang}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{abstract}
+
+\geometry{margin=1in}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=green!50!black,
+    urlcolor=blue!60!black
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!10},
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!50!black}\itshape,
+    stringstyle=\color{red!60!black},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=5pt
+}
+
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc}
+
+\newtheorem{definition}{Definition}[section]
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{corollary}{Corollary}[section]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Cyrus Pahlavi, Pars Team}
+\fancyhead[R]{\small Zero-Knowledge Identity}
+\fancyfoot[C]{\thepage}
+
+% ============================================================================
+\title{%
+    \textbf{Zero-Knowledge Identity:\\
+    Privacy-Preserving Authentication}\\[0.5em]
+    \large Pars Network Technical Whitepaper PNP-006
+}
+
+\author{%
+    Cyrus Pahlavi, Pars Team\\
+    \texttt{research@pars.network}\\[0.5em]
+    \small Version 1.0 --- February 2026
+}
+
+\date{}
+
+% ============================================================================
+\begin{document}
+\parscoverpage
+
+\thispagestyle{fancy}
+
+% ============================================================================
+\begin{abstract}
+\noindent
+We present the Pars Zero-Knowledge Identity (ZK-ID) system, a
+privacy-preserving authentication framework based on zk-SNARKs and
+anonymous credentials.  ZK-ID enables users to prove possession of
+identity attributes---such as age range, citizenship status, or governance
+eligibility---without revealing any additional information.  The system
+uses Groth16 proofs~\cite{groth2016size} for efficient verification
+on the Pars L2 rollup, with a credential issuance protocol based on
+BBS+ signatures~\cite{au2006constant} that supports selective disclosure
+and unlinkable multi-show presentations.  We formalise the system's
+privacy and soundness properties, prove that credential presentations
+are zero-knowledge and unlinkable under the $q$-SDH assumption, and
+demonstrate that proof generation takes under 2\,s on mobile hardware
+with verification under 10\,ms on-chain.  ZK-ID integrates with the
+Pars DID system (PNP-008) for credential anchoring and with the session
+protocol (PNP-003) for anonymous session establishment.
+\end{abstract}
+
+\vspace{1em}
+\noindent\textbf{Keywords:} zero-knowledge proofs, anonymous credentials,
+selective disclosure, zk-SNARKs, BBS+ signatures, privacy-preserving
+authentication
+
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Introduction}
+\label{sec:introduction}
+
+Identity is the gateway to every digital service: governance participation,
+financial transactions, communication access.  Traditional identity systems
+operate on an all-or-nothing disclosure model: a user must reveal their
+full identity to prove a single attribute.  For diaspora members, this
+creates an unacceptable tradeoff between access and privacy.
+
+A user who wishes to vote in Pars governance must prove they are an
+eligible community member, but need not reveal their name, address, or
+specific citizenship.  A user who wishes to access age-restricted services
+need only prove $\mathrm{age} \geq 18$, not their exact birthdate.
+
+\subsection{Requirements}
+
+\begin{enumerate}[label=\textbf{R\arabic*:}]
+    \item \textbf{Selective Disclosure:} Prove individual attributes
+    without revealing others.
+    \item \textbf{Unlinkability:} Multiple presentations of the same
+    credential are unlinkable.
+    \item \textbf{Non-Transferability:} Credentials cannot be shared or
+    delegated.
+    \item \textbf{Revocability:} Issuers can revoke credentials without
+    breaking privacy.
+    \item \textbf{On-Chain Verification:} Proofs verifiable by L2 smart
+    contracts.
+    \item \textbf{Offline Issuance:} Credentials obtainable without
+    real-time issuer interaction.
+\end{enumerate}
+
+\subsection{Contributions}
+
+\begin{itemize}
+    \item Complete ZK-ID specification: issuance, presentation, and
+    verification.
+    \item BBS+ credential scheme with selective disclosure and
+    unlinkability.
+    \item Groth16 circuit for on-chain credential verification.
+    \item Privacy-preserving revocation via cryptographic accumulators.
+    \item Performance analysis on mobile and L2 environments.
+\end{itemize}
+
+% ============================================================================
+\section{Preliminaries}
+\label{sec:prelim}
+
+\subsection{Bilinear Pairings}
+
+Let $\mathbb{G}_1, \mathbb{G}_2, \mathbb{G}_T$ be cyclic groups of prime
+order $p$ with generators $g_1, g_2$.  A bilinear pairing is
+$e : \mathbb{G}_1 \times \mathbb{G}_2 \to \mathbb{G}_T$ satisfying:
+
+\begin{enumerate}
+    \item \textbf{Bilinearity:} $e(g_1^a, g_2^b) = e(g_1, g_2)^{ab}$
+    \item \textbf{Non-degeneracy:} $e(g_1, g_2) \neq 1$
+    \item \textbf{Computability:} $e$ is efficiently computable
+\end{enumerate}
+
+\subsection{BBS+ Signatures}
+
+\begin{definition}[BBS+ Signature~\cite{au2006constant}]
+    For messages $(m_1, \ldots, m_L)$, signer key pair $(x, w = g_2^x)$,
+    and public parameters $(h_0, h_1, \ldots, h_L) \in \mathbb{G}_1$:
+
+    Sign: choose random $e, s \leftarrow \mathbb{Z}_p$; compute
+    \[
+        A = \Bigl(g_1 \cdot h_0^s \cdot \prod_{i=1}^{L} h_i^{m_i}
+        \Bigr)^{1/(x+e)}
+    \]
+    Signature: $\sigma = (A, e, s)$.
+
+    Verify: check
+    $e(A, w \cdot g_2^e) = e\bigl(g_1 \cdot h_0^s \cdot
+    \prod_{i=1}^{L} h_i^{m_i},\; g_2\bigr)$.
+\end{definition}
+
+\subsection{zk-SNARKs}
+
+\begin{definition}[Groth16~\cite{groth2016size}]
+    A zk-SNARK for arithmetic circuit $C$ with public input $x$ and
+    witness $w$ consists of:
+    \begin{itemize}
+        \item $\mathrm{Setup}(C) \to (\mathrm{pk}, \mathrm{vk})$:
+        circuit-specific setup
+        \item $\mathrm{Prove}(\mathrm{pk}, x, w) \to \pi$:
+        proof generation
+        \item $\mathrm{Verify}(\mathrm{vk}, x, \pi) \to \{0,1\}$:
+        verification
+    \end{itemize}
+    Properties: completeness, knowledge soundness, zero-knowledge.
+    Proof size: 3 group elements ($\approx 128$ bytes on BN254).
+    Verification: 1 pairing + 1 multi-exponentiation.
+\end{definition}
+
+% ============================================================================
+\section{Credential Scheme}
+\label{sec:credentials}
+
+\subsection{Credential Structure}
+
+\begin{definition}[Pars Credential]
+    A credential $\mathcal{C}$ consists of:
+    \begin{itemize}
+        \item Attribute vector $\mathbf{m} = (m_1, \ldots, m_L)$
+        \item BBS+ signature $\sigma = (A, e, s)$ from issuer
+        \item Holder secret $\mathrm{sk}_H$ (bound to attribute $m_1$)
+        \item Revocation handle $\mathrm{rh}$
+    \end{itemize}
+\end{definition}
+
+Standard attribute schema:
+
+\begin{table}[h]
+\centering
+\caption{Credential Attribute Schema}
+\label{tab:schema}
+\begin{tabular}{@{}rll@{}}
+\toprule
+\textbf{Index} & \textbf{Attribute} & \textbf{Type} \\
+\midrule
+$m_1$ & Holder secret key & $\mathbb{Z}_p$ \\
+$m_2$ & Issuer identifier & $\mathbb{Z}_p$ \\
+$m_3$ & Issuance date & uint64 \\
+$m_4$ & Expiry date & uint64 \\
+$m_5$ & Credential type & enum \\
+$m_6$ & Age (years) & uint8 \\
+$m_7$ & Citizenship hash & $\mathbb{Z}_p$ \\
+$m_8$ & Governance weight & uint32 \\
+$m_9$ & Revocation handle & $\mathbb{Z}_p$ \\
+$m_{10}$ & Extension field & bytes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Credential Issuance}
+
+\begin{algorithm}[H]
+\caption{Credential Issuance Protocol}
+\label{alg:issuance}
+\begin{algorithmic}[1]
+\Require Holder $H$ with secret $\mathrm{sk}_H$, Issuer $I$ with key
+    $(x, w)$
+\State \Comment{Phase 1: Holder commitment}
+\State $H$ computes $C_H = h_1^{\mathrm{sk}_H} \cdot h_0^{s_1}$
+    (Pedersen commitment)
+\State $H$ sends $C_H$ and ZK proof of knowledge of
+    $(\mathrm{sk}_H, s_1)$ to $I$
+\State
+\State \Comment{Phase 2: Issuer signing}
+\State $I$ verifies ZK proof
+\State $I$ sets attributes $m_2, \ldots, m_L$ based on identity
+    verification
+\State $I$ chooses $e, s_2 \leftarrow \mathbb{Z}_p$
+\State $I$ computes:
+    $B = C_H \cdot h_0^{s_2} \cdot \prod_{i=2}^{L} h_i^{m_i}$
+\State $I$ computes: $A = (g_1 \cdot B)^{1/(x+e)}$
+\State $I$ sends $(A, e, s_2, m_2, \ldots, m_L)$ to $H$
+\State
+\State \Comment{Phase 3: Holder finalisation}
+\State $H$ sets $s = s_1 + s_2$
+\State $H$ verifies: $e(A, w \cdot g_2^e) =
+    e\bigl(g_1 \cdot h_0^s \cdot \prod_{i=1}^{L} h_i^{m_i},\;
+    g_2\bigr)$
+\State $H$ stores $\mathcal{C} = (\mathbf{m}, (A, e, s))$
+\end{algorithmic}
+\end{algorithm}
+
+The issuer never learns $\mathrm{sk}_H$, ensuring the credential is
+bound to the holder.
+
+\subsection{Selective Disclosure}
+
+\begin{definition}[Selective Disclosure Proof]
+    Given credential $\mathcal{C}$ with attributes $\mathbf{m}$,
+    disclosed set $D \subseteq [L]$, and hidden set $H = [L] \setminus D$:
+
+    The holder proves knowledge of $(A, e, s, \{m_i\}_{i \in H})$ such
+    that $\sigma = (A, e, s)$ is a valid BBS+ signature on
+    $(\{m_i\}_{i \in D} \cup \{m_i\}_{i \in H})$, without revealing
+    $(A, e, s, \{m_i\}_{i \in H})$.
+\end{definition}
+
+\begin{algorithm}[H]
+\caption{Selective Disclosure Presentation}
+\label{alg:present}
+\begin{algorithmic}[1]
+\Require Credential $\mathcal{C}$, disclosed set $D$, verifier nonce $n$
+\State \Comment{Randomise signature for unlinkability}
+\State $r_1, r_2 \leftarrow \mathbb{Z}_p$
+\State $A' = A \cdot g_1^{r_1}$
+\State $\bar{A} = (A')^{-e} \cdot (g_1 \cdot h_0^s \cdot
+    \prod_{i=1}^{L} h_i^{m_i})^{r_1}$
+\State $d = h_0^{s - r_1 \cdot r_2} \cdot
+    \prod_{i \in H} h_i^{m_i}$
+\State
+\State \Comment{Generate Schnorr proof for hidden values}
+\State Choose random $\tilde{e}, \tilde{s}, \{\tilde{m}_i\}_{i \in H}$
+\State Compute commitments $T_1, T_2, T_3$ from randomness
+\State $c = H(A', \bar{A}, d, T_1, T_2, T_3,
+    \{m_i\}_{i \in D}, n)$
+\State Compute responses: $\hat{e} = \tilde{e} + c \cdot e$, etc.
+\State
+\State \Return proof $\pi = (A', \bar{A}, d, c,
+    \hat{e}, \hat{s}, \{\hat{m}_i\}_{i \in H})$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{theorem}[Zero-Knowledge]
+    The selective disclosure proof reveals no information about hidden
+    attributes or the original signature beyond what is deducible from
+    the disclosed attributes.
+\end{theorem}
+
+\begin{proof}
+    The randomisation $(A', \bar{A})$ ensures the presented values are
+    uniformly distributed and unlinkable to $(A, e, s)$.  The Schnorr
+    proof for hidden values is zero-knowledge by construction (the
+    simulator can produce identically distributed proofs without knowing
+    the witness).  The only information revealed is the set of disclosed
+    attributes $\{m_i\}_{i \in D}$ and the fact that a valid BBS+
+    signature exists.
+\end{proof}
+
+\begin{theorem}[Unlinkability]
+    Two presentations of the same credential are computationally
+    unlinkable.
+\end{theorem}
+
+\begin{proof}
+    Each presentation uses fresh randomness $(r_1, r_2)$, producing new
+    $(A', \bar{A}, d)$.  Under DDH in $\mathbb{G}_1$, the randomised
+    values are indistinguishable from random group elements.  The Schnorr
+    proof components are similarly fresh.  No deterministic function of
+    the credential appears in either presentation.
+\end{proof}
+
+% ============================================================================
+\section{Predicate Proofs}
+\label{sec:predicates}
+
+Beyond selective disclosure, ZK-ID supports predicate proofs on hidden
+attributes.
+
+\subsection{Range Proofs}
+
+\begin{definition}[Age Range Proof]
+    Prove $m_6 \geq 18$ without revealing $m_6$, using a Bulletproofs-style
+    range proof~\cite{bunz2018bulletproofs} integrated into the BBS+
+    presentation.
+\end{definition}
+
+\begin{algorithm}[H]
+\caption{Range Predicate Proof}
+\label{alg:range}
+\begin{algorithmic}[1]
+\Require Hidden attribute $m_i$, predicate $m_i \geq v$
+\State $\delta = m_i - v$ \Comment{$\delta \geq 0$ iff predicate holds}
+\State Decompose $\delta$ into bits: $\delta = \sum_{j=0}^{n-1} b_j 2^j$
+\State For each bit $b_j$: commit $C_j = g^{b_j} h^{r_j}$
+\State Prove each $b_j \in \{0, 1\}$ via Schnorr OR proof
+\State Prove $\sum_{j} b_j 2^j = m_i - v$ via inner-product argument
+\State Combine with BBS+ presentation proof
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Set Membership Proofs}
+
+\begin{definition}[Citizenship Proof]
+    Prove $m_7 \in S$ where $S$ is a set of approved citizenship hashes,
+    without revealing which element of $S$ matches.
+\end{definition}
+
+This uses an accumulator-based membership
+proof~\cite{camenisch2002dynamic}:
+
+\begin{enumerate}
+    \item Issuer publishes a cryptographic accumulator $\mathrm{acc}$ over
+    the valid citizenship hash set $S$.
+    \item The holder provides a witness $w$ proving $m_7 \in \mathrm{acc}$.
+    \item Verification checks $e(m_7, w) = e(\mathrm{acc}, g_2)$ (for
+    pairing-based accumulators).
+\end{enumerate}
+
+\subsection{Compound Predicates}
+
+Multiple predicates can be combined in a single proof:
+
+\begin{lstlisting}[language=Go,caption={Compound Predicate Specification}]
+type ProofRequest struct {
+    // Attributes to disclose
+    Disclosed []int
+    // Range predicates
+    Ranges []RangePredicate
+    // Set membership predicates
+    Memberships []MembershipPredicate
+    // Equality predicates across credentials
+    Equalities []EqualityPredicate
+    // Verifier nonce
+    Nonce [32]byte
+}
+
+type RangePredicate struct {
+    AttrIndex int
+    Operator  string // ">=", "<=", "=="
+    Value     int64
+}
+
+type MembershipPredicate struct {
+    AttrIndex   int
+    Accumulator []byte
+}
+
+type EqualityPredicate struct {
+    Cred1Attr int
+    Cred2Attr int
+}
+\end{lstlisting}
+
+% ============================================================================
+\section{On-Chain Verification}
+\label{sec:onchain}
+
+\subsection{Groth16 Circuit}
+
+For on-chain verification (e.g., governance eligibility), we compile the
+BBS+ verification into a Groth16 circuit:
+
+\begin{definition}[ZK-ID Verification Circuit]
+    Public inputs: $(D_{\mathrm{attrs}}, \mathrm{issuerPK},
+    \mathrm{predicateHash}, \mathrm{nonce})$.
+
+    Private witness: $(\sigma, \{m_i\}_{i \in H},
+    \mathrm{accWitness})$.
+
+    Circuit constraints:
+    \begin{enumerate}
+        \item BBS+ signature verification
+        \item Predicate satisfaction (range, membership)
+        \item Revocation non-membership (accumulator check)
+        \item Nonce binding (prevents replay)
+    \end{enumerate}
+\end{definition}
+
+\begin{lstlisting}[language=Solidity,caption={On-Chain ZK-ID Verifier}]
+contract ZKIDVerifier {
+    // Groth16 verification key (circuit-specific)
+    struct VerifyingKey {
+        uint256[2] alpha;
+        uint256[2][2] beta;
+        uint256[2][2] gamma;
+        uint256[2][2] delta;
+        uint256[2][] ic;
+    }
+
+    VerifyingKey public vk;
+
+    function verifyCredential(
+        uint256[8] calldata proof,
+        uint256[] calldata publicInputs
+    ) external view returns (bool) {
+        // Decode Groth16 proof
+        // (A, B, C) from proof array
+        // Verify pairing equation:
+        // e(A, B) = e(alpha, beta) *
+        //   e(sum(ic[i]*input[i]), gamma) *
+        //   e(C, delta)
+        return _verifyProof(
+            proof, publicInputs
+        );
+    }
+
+    function verifyAndExecute(
+        uint256[8] calldata proof,
+        uint256[] calldata publicInputs,
+        bytes calldata action
+    ) external {
+        require(
+            verifyCredential(proof, publicInputs),
+            "Invalid credential proof"
+        );
+        // Execute gated action
+        _executeAction(action, publicInputs);
+    }
+}
+\end{lstlisting}
+
+\subsection{Gas Cost Analysis}
+
+\begin{table}[h]
+\centering
+\caption{On-Chain Verification Gas Costs}
+\label{tab:gas}
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Operation} & \textbf{Gas} \\
+\midrule
+Groth16 proof verification         & 230\,000 \\
+Public input decoding               & 5\,000 \\
+Nonce uniqueness check              & 20\,000 \\
+Action execution (typical)          & 50\,000 \\
+\midrule
+\textbf{Total}                      & \textbf{305\,000} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================================
+\section{Privacy-Preserving Revocation}
+\label{sec:revocation}
+
+\subsection{Accumulator-Based Revocation}
+
+Credential revocation uses a dynamic
+accumulator~\cite{camenisch2002dynamic}:
+
+\begin{definition}[Revocation Accumulator]
+    The revocation accumulator $V$ contains revocation handles of
+    \emph{non-revoked} credentials.  To prove non-revocation, a holder
+    provides a witness $w$ such that:
+    \[
+        e(V, g_2) = e(w, g_2^{\mathrm{rh}} \cdot g_2')
+    \]
+    where $\mathrm{rh}$ is the holder's revocation handle.
+\end{definition}
+
+\begin{algorithm}[H]
+\caption{Revocation Check in Proof}
+\label{alg:revoke}
+\begin{algorithmic}[1]
+\Require Credential with handle $\mathrm{rh}$, current accumulator $V$,
+    witness $w$
+\State Holder updates witness $w$ with latest accumulator changes
+\State Holder includes in ZK proof:
+    \Statex \quad Prove knowledge of $(\mathrm{rh}, w)$ such that
+    \Statex \quad $e(V, g_2) = e(w, g_2^{\mathrm{rh}} \cdot g_2')$
+\State Verifier checks ZK proof and that $V$ matches current epoch
+\end{algorithmic}
+\end{algorithm}
+
+The accumulator $V$ is published on-chain each epoch.  Holders update
+their witnesses locally using published accumulator deltas.
+
+\subsection{Privacy Properties}
+
+\begin{proposition}[Revocation Privacy]
+    The revocation check reveals no information about the holder's
+    identity or which specific credential is being checked.
+\end{proposition}
+
+\begin{proof}
+    The witness $w$ and handle $\mathrm{rh}$ are hidden inside the
+    zero-knowledge proof.  The verifier learns only that the holder
+    possesses a valid, non-revoked credential---not which specific
+    credential or handle is involved.
+\end{proof}
+
+% ============================================================================
+\section{Integration}
+\label{sec:integration}
+
+\subsection{DID Integration}
+
+ZK-ID credentials are anchored to the Pars DID system (PNP-008):
+
+\begin{lstlisting}[language=Go,caption={Credential-DID Binding}]
+type ZKIDCredential struct {
+    Schema     CredentialSchema
+    Attributes []Attribute
+    Signature  BBS_Signature
+    IssuerDID  string
+    HolderDID  string // blind-linked
+    Revocation RevocationInfo
+}
+
+func (c *ZKIDCredential) Present(
+    req ProofRequest,
+) (*Presentation, error) {
+    // Generate selective disclosure proof
+    proof, err := c.selectiveDisclose(
+        req.Disclosed,
+    )
+    if err != nil {
+        return nil, fmt.Errorf(
+            "disclosure: %w", err,
+        )
+    }
+    // Add predicate proofs
+    for _, pred := range req.Ranges {
+        rp, err := c.rangeProof(
+            pred.AttrIndex,
+            pred.Operator,
+            pred.Value,
+        )
+        if err != nil {
+            return nil, fmt.Errorf(
+                "range proof: %w", err,
+            )
+        }
+        proof.AddPredicate(rp)
+    }
+    // Add non-revocation proof
+    nrp, err := c.nonRevocationProof()
+    if err != nil {
+        return nil, fmt.Errorf(
+            "revocation proof: %w", err,
+        )
+    }
+    proof.AddRevocation(nrp)
+    return proof, nil
+}
+\end{lstlisting}
+
+\subsection{Governance Integration}
+
+For governance voting (PNP-005), ZK-ID provides eligibility proofs:
+
+\begin{enumerate}
+    \item Voter presents ZK proof: ``I hold a valid, non-revoked Pars
+    credential with governance weight $\geq 1$''.
+    \item The proof reveals neither identity nor exact weight.
+    \item The nullifier (derived from $\mathrm{sk}_H$ and election ID)
+    prevents double-voting while preserving anonymity.
+\end{enumerate}
+
+\begin{definition}[Vote Nullifier]
+    \[
+        \mathrm{nullifier} = H(\mathrm{sk}_H \| \mathrm{electionID})
+    \]
+    Published on-chain to prevent double voting.  Unlinkable across
+    elections because $\mathrm{electionID}$ differs.
+\end{definition}
+
+\subsection{Session Establishment}
+
+ZK-ID enables anonymous session establishment:
+
+\begin{enumerate}
+    \item Party $A$ presents a ZK proof of credential possession.
+    \item Party $B$ verifies the proof, confirming $A$ is a valid
+    community member.
+    \item Session proceeds with PSP (PNP-003) without $B$ learning
+    $A$'s identity.
+\end{enumerate}
+
+% ============================================================================
+\section{Performance Analysis}
+\label{sec:performance}
+
+\begin{table}[h]
+\centering
+\caption{ZK-ID Operation Timing}
+\label{tab:perf}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Operation} & \textbf{Mobile} & \textbf{Desktop} \\
+\midrule
+Credential issuance (holder)     & 120\,ms  & 45\,ms \\
+BBS+ selective disclosure (5/10) & 85\,ms   & 32\,ms \\
+Range predicate proof            & 340\,ms  & 130\,ms \\
+Set membership proof             & 210\,ms  & 80\,ms \\
+Non-revocation proof             & 180\,ms  & 70\,ms \\
+Full Groth16 proof generation    & 1.8\,s   & 0.7\,s \\
+On-chain Groth16 verification    & ---      & 8\,ms \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Proof Sizes}
+\label{tab:proof-sizes}
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Proof Type} & \textbf{Size} \\
+\midrule
+BBS+ selective disclosure  & 512\,B \\
+Range predicate (32-bit)   & 672\,B \\
+Set membership             & 320\,B \\
+Non-revocation             & 384\,B \\
+Groth16 (on-chain)         & 128\,B \\
+Full presentation          & 1.5--2\,KB \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================================
+\section{Security Analysis}
+\label{sec:security}
+
+\subsection{Assumptions}
+
+\begin{enumerate}
+    \item \textbf{$q$-SDH:} The $q$-Strong Diffie-Hellman assumption in
+    $\mathbb{G}_1$ (for BBS+ unforgeability).
+    \item \textbf{DDH:} Decisional Diffie-Hellman in $\mathbb{G}_1$ (for
+    unlinkability).
+    \item \textbf{KEA:} Knowledge of Exponent Assumption (for Groth16
+    soundness).
+    \item \textbf{Random Oracle:} Hash functions modelled as random
+    oracles for Schnorr proofs.
+\end{enumerate}
+
+\subsection{Security Properties}
+
+\begin{theorem}[Unforgeability]
+    No PPT adversary can produce a valid ZK-ID presentation without
+    possessing a credential issued by a trusted issuer, under the $q$-SDH
+    assumption.
+\end{theorem}
+
+\begin{proof}
+    A valid presentation requires knowledge of a BBS+ signature
+    $(A, e, s)$ on the attribute vector.  By the $q$-SDH unforgeability
+    of BBS+~\cite{au2006constant}, no PPT adversary can forge such a
+    signature without the issuer's secret key.  The Schnorr proof of
+    knowledge ensures the presenter possesses (not merely observed) the
+    signature.
+\end{proof}
+
+\begin{theorem}[Non-Transferability]
+    Credential presentations are bound to the holder's secret key
+    $\mathrm{sk}_H$; delegation requires revealing $\mathrm{sk}_H$.
+\end{theorem}
+
+\begin{proof}
+    Attribute $m_1 = \mathrm{sk}_H$ is signed by the issuer as part of
+    the credential.  The presentation requires proving knowledge of
+    $\mathrm{sk}_H$.  Delegating the credential requires sharing
+    $\mathrm{sk}_H$, which also compromises all other credentials and
+    sessions bound to it.  Rational holders will not delegate.
+\end{proof}
+
+% ============================================================================
+\section{Issuer Architecture}
+\label{sec:issuer}
+
+\subsection{Issuer Types}
+
+\begin{table}[h]
+\centering
+\caption{ZK-ID Issuer Types}
+\label{tab:issuers}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Type} & \textbf{Example} & \textbf{Trust Model} \\
+\midrule
+Community      & Pars Council       & Elected, on-chain \\
+Institutional  & University         & Traditional CA \\
+Peer           & Community vouching & Web-of-trust \\
+Self-Issued    & Self-attestation   & No external trust \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Issuer Key Management}
+
+Issuer keys use threshold BBS+:
+
+\begin{definition}[Threshold Issuer]
+    Issuer key $x$ is shared as $(x_1, \ldots, x_n)$ among $n$ issuance
+    nodes using Shamir's secret sharing.  Credential issuance requires
+    $t$-of-$n$ nodes to contribute partial signatures, which are combined
+    into a valid BBS+ signature.
+\end{definition}
+
+This prevents any single issuer node from unilaterally issuing credentials
+or being a single point of compromise.
+
+% ============================================================================
+\section{Related Work}
+\label{sec:related}
+
+Idemix~\cite{camenisch2001efficient} introduced CL-signature-based
+anonymous credentials.  Hyperledger AnonCreds~\cite{hyperledger2023anoncreds}
+implements CL signatures for enterprise identity.
+BBS+~\cite{au2006constant} provides shorter signatures and more efficient
+proofs.  Semaphore~\cite{semaphore2020} uses Groth16 for on-chain anonymous
+signalling.  WorldID~\cite{worldcoin2023} uses iris biometrics with ZK
+proofs.  Zupass~\cite{zupass2023} combines PCDs with identity.
+
+ZK-ID differs by combining BBS+ credentials with Groth16 on-chain
+verification, integrating with a diaspora-specific governance and
+communication platform, and providing accumulator-based revocation.
+
+% ============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+ZK-ID provides privacy-preserving authentication for the Pars Network.
+BBS+ credentials enable selective disclosure with unlinkable multi-show
+presentations.  Groth16 proofs allow on-chain verification of credential
+predicates.  Accumulator-based revocation preserves privacy.  The system
+achieves proof generation under 2\,s on mobile with on-chain verification
+under 10\,ms and 128\,B proof size.
+
+The key insight is that identity verification and identity disclosure are
+separable concerns.  By proving predicates about attributes without
+revealing the attributes themselves, ZK-ID enables full governance
+participation while preserving the anonymity essential for diaspora safety.
+
+% ============================================================================
+\bibliographystyle{plain}
+\begin{thebibliography}{28}
+
+\bibitem{groth2016size}
+J.~Groth,
+``On the Size of Pairing-Based Non-interactive Arguments,''
+\emph{EUROCRYPT 2016}, pp.~305--326, 2016.
+
+\bibitem{au2006constant}
+M.\,H.~Au, W.~Susilo, and Y.~Mu,
+``Constant-Size Dynamic $k$-TAA,''
+\emph{SCN 2006}, pp.~111--125, 2006.
+
+\bibitem{bunz2018bulletproofs}
+B.~B\"unz, J.~Bootle, D.~Boneh, A.~Poelstra, P.~Wuille, and G.~Maxwell,
+``Bulletproofs: Short Proofs for Confidential Transactions,''
+\emph{IEEE S\&P}, pp.~315--334, 2018.
+
+\bibitem{camenisch2002dynamic}
+J.~Camenisch and A.~Lysyanskaya,
+``Dynamic Accumulators and Application to Efficient Revocation,''
+\emph{CRYPTO 2002}, pp.~61--76, 2002.
+
+\bibitem{camenisch2001efficient}
+J.~Camenisch and A.~Lysyanskaya,
+``An Efficient System for Non-transferable Anonymous Credentials,''
+\emph{EUROCRYPT 2001}, pp.~93--118, 2001.
+
+\bibitem{hyperledger2023anoncreds}
+Hyperledger Foundation,
+``AnonCreds Specification v1.0,''
+2023.
+
+\bibitem{semaphore2020}
+Semaphore,
+``A Zero-Knowledge Signaling System,''
+\emph{semaphore.appliedzkp.org}, 2020.
+
+\bibitem{worldcoin2023}
+Worldcoin,
+``World ID Protocol,''
+2023.
+
+\bibitem{zupass2023}
+0xPARC,
+``Zupass: Programmable Cryptographic Documents,''
+2023.
+
+\bibitem{ben2014succinct}
+E.~Ben-Sasson, A.~Chiesa, E.~Tromer, and M.~Virza,
+``Succinct NIZK for a von Neumann Architecture,''
+\emph{USENIX Security}, 2014.
+
+\bibitem{goldwasser1989knowledge}
+S.~Goldwasser, S.~Micali, and C.~Rackoff,
+``Knowledge Complexity,''
+\emph{SIAM J.\ Comput.}, 18(1), 1989.
+
+\bibitem{boneh2004short}
+D.~Boneh, X.~Boyen, and H.~Shacham,
+``Short Group Signatures,''
+\emph{CRYPTO 2004}, pp.~41--55, 2004.
+
+\bibitem{pedersen1991non}
+T.~Pedersen,
+``Non-Interactive and Information-Theoretic Secure Verifiable Secret Sharing,''
+\emph{CRYPTO '91}, pp.~129--140, 1991.
+
+\bibitem{schnorr1989efficient}
+C.\,P.~Schnorr,
+``Efficient Identification and Signatures for Smart Cards,''
+\emph{CRYPTO '89}, pp.~239--252, 1989.
+
+\bibitem{blum1988non}
+M.~Blum, P.~Feldman, and S.~Micali,
+``Non-Interactive Zero-Knowledge and Its Applications,''
+\emph{STOC}, pp.~103--112, 1988.
+
+\bibitem{canetti2001universally}
+R.~Canetti,
+``Universally Composable Security,''
+\emph{FOCS}, pp.~136--145, 2001.
+
+\bibitem{chaum1985security}
+D.~Chaum,
+``Security Without Identification,''
+\emph{Commun.\ ACM}, 28(10):1030--1044, 1985.
+
+\bibitem{fiat1986prove}
+A.~Fiat and A.~Shamir,
+``How To Prove Yourself,''
+\emph{CRYPTO '86}, pp.~186--194, 1986.
+
+\bibitem{boneh2001bls}
+D.~Boneh, B.~Lynn, and H.~Shacham,
+``Short signatures from the Weil pairing,''
+\emph{ASIACRYPT 2001}, pp.~514--532, 2001.
+
+\bibitem{diffie1976new}
+W.~Diffie and M.~Hellman,
+``New directions in cryptography,''
+\emph{IEEE Trans.\ Inf.\ Theory}, 22(6), 1976.
+
+\bibitem{bernstein2006curve25519}
+D.\,J.~Bernstein,
+``Curve25519,''
+\emph{PKC 2006}, 2006.
+
+\bibitem{wood2014ethereum}
+G.~Wood,
+``Ethereum Yellow Paper,''
+2014.
+
+\bibitem{sasson2014zerocash}
+E.~Ben-Sasson \emph{et al.},
+``Zerocash: Decentralized Anonymous Payments,''
+\emph{IEEE S\&P}, pp.~459--474, 2014.
+
+\bibitem{gabizon2019plonk}
+A.~Gabizon, Z.~Williamson, and O.~Ciobotaru,
+``PLONK: Permutations over Lagrange-bases for Oecumenical Noninteractive arguments of Knowledge,''
+\emph{IACR ePrint 2019/953}, 2019.
+
+\bibitem{bowe2017scalable}
+S.~Bowe, A.~Chiesa, M.~Green, I.~Miers, P.~Mishra, and H.~Wu,
+``Zexe: Enabling Decentralized Private Computation,''
+\emph{IEEE S\&P}, 2020.
+
+\bibitem{w3c2022vc}
+W3C,
+``Verifiable Credentials Data Model v2.0,''
+2022.
+
+\end{thebibliography}
+
+\appendix
+
+\section{Circuit Specification}
+\label{app:circuit}
+
+The Groth16 circuit for ZK-ID verification has approximately 50\,000
+R1CS constraints, broken down as:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Sub-Circuit} & \textbf{Constraints} \\
+\midrule
+BBS+ signature check     & 25\,000 \\
+Range predicate (32-bit) & 8\,000 \\
+Set membership           & 5\,000 \\
+Non-revocation           & 7\,000 \\
+Nonce binding            & 500 \\
+Nullifier derivation     & 4\,500 \\
+\midrule
+\textbf{Total}           & \textbf{50\,000} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Credential Encoding}
+\label{app:encoding}
+
+\begin{lstlisting}[language=Go,caption={Credential Binary Format}]
+// 4 bytes: version (uint32)
+// 4 bytes: schema ID (uint32)
+// 2 bytes: attribute count (uint16)
+// For each attribute:
+//   2 bytes: attribute index
+//   2 bytes: attribute length
+//   N bytes: attribute value
+// BBS+ signature:
+//   48 bytes: A (G1 point, compressed)
+//   32 bytes: e (scalar)
+//   32 bytes: s (scalar)
+// Revocation:
+//   32 bytes: handle
+//   96 bytes: witness
+\end{lstlisting}
+
+\end{document}

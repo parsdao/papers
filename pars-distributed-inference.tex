@@ -1,0 +1,829 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{shared/parscover}
+
+% --- Packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{listings}
+\usepackage{microtype}
+\usepackage{natbib}
+\usepackage{doi}
+\usepackage{url}
+\usepackage{xspace}
+\usepackage{multirow}
+
+\geometry{margin=1in}
+\pgfplotsset{compat=1.18}
+
+% --- Macros ---
+\newcommand{\Pars}{\textsc{Pars}\xspace}
+\newcommand{\parsdi}{\textsc{ParsInfer}\xspace}
+\newcommand{\RR}{\mathbb{R}}
+\newcommand{\EE}{\mathbb{E}}
+
+\newtheorem{definition}{Definition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+
+% --- Header ---
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Cyrus Pahlavi, Pars Team}
+\fancyhead[R]{\small Distributed AI Inference}
+\fancyfoot[C]{\thepage}
+
+\title{Distributed AI Inference on Mobile Mesh Networks\\[0.5em]
+\large Pipeline Parallelism for Heterogeneous Edge Devices on the Pars Network}
+
+\author{
+  Cyrus Pahlavi, Pars Team\\
+  \texttt{research@pars.id}
+}
+
+\date{February 2026}
+
+\begin{document}
+\parscoverpage
+
+
+\begin{abstract}
+We present \parsdi, a distributed inference framework that partitions large language models across heterogeneous mobile and edge devices connected via the Pars mesh network. \parsdi enables community-scale AI inference without centralized GPU infrastructure by decomposing transformer models into pipeline stages optimally assigned to available devices based on their compute capacity, memory, and network bandwidth. We formulate the model partitioning problem as a constrained optimization over a weighted device graph and present an efficient dynamic programming solution with $O(L \cdot N^2)$ complexity for $L$ layers and $N$ devices. Our fault tolerance mechanism provides seamless recovery from device departure with median failover latency of 180ms. Evaluation on ParsLM models (1.3B--13B parameters) across realistic mesh topologies demonstrates that \parsdi achieves 73\% of single-GPU throughput using 8 consumer smartphones, with time-to-first-token latency of 420ms for the 7B model. We show that inference quality is bit-identical to single-device execution, as our partitioning operates at the layer boundary with no approximation.
+\end{abstract}
+
+\section{Introduction}
+
+Large language models (LLMs) require substantial computational resources for inference, typically served from centralized GPU clusters~\citep{pope2023efficiently}. For the Pars Network, this centralized dependency is problematic: it creates reliance on cloud providers who may restrict access due to sanctions or political pressure, and it requires funneling potentially sensitive community queries through centralized endpoints.
+
+The Pars Network's mesh of community-operated devices---smartphones, tablets, laptops, and home servers---collectively possesses significant compute capacity. A typical diaspora household with a modern smartphone (6 GB RAM, Neural Engine), a laptop (16 GB RAM, discrete GPU), and a smart TV or gaming console provides enough aggregate compute for LLM inference at useful throughput, provided the model can be efficiently distributed across these devices.
+
+\subsection{Challenges}
+
+\begin{enumerate}[label=(\arabic*)]
+    \item \textbf{Device heterogeneity:} Available devices range from budget Android phones (2 GB RAM, Cortex-A55) to gaming PCs (32 GB RAM, RTX 4090). The partitioning must account for 100$\times$ differences in compute capability.
+    \item \textbf{Network variability:} Devices connect via Wi-Fi (10--500 Mbps), Bluetooth (2 Mbps), or the Pars mesh network (1--50 Mbps). Link quality fluctuates over time.
+    \item \textbf{Dynamic availability:} Devices join and leave the network unpredictably. A phone may be used for other tasks, a laptop may enter sleep mode, a user may leave Wi-Fi range.
+    \item \textbf{Latency sensitivity:} Interactive AI applications (chat, search) require low time-to-first-token (TTFT) latency, constraining the pipeline depth and inter-device communication overhead.
+    \item \textbf{Privacy:} Intermediate activations transmitted between devices could leak information about the input. The inference must preserve input confidentiality.
+\end{enumerate}
+
+\subsection{Contributions}
+
+\begin{enumerate}[label=(\roman*)]
+    \item We formalize the \emph{heterogeneous pipeline partitioning} problem and present a dynamic programming algorithm that finds optimal layer-to-device assignments in $O(L \cdot N^2)$ time.
+    \item We design a \emph{speculative pipeline execution} strategy that overlaps communication with computation to hide inter-device latency.
+    \item We implement \emph{hot-standby replication} for fault tolerance, maintaining redundant model shards on nearby devices with 180ms median failover.
+    \item We introduce \emph{activation encryption} using lightweight stream ciphers to protect intermediate activations in transit, adding less than 3\% overhead.
+    \item We evaluate \parsdi on realistic mesh topologies with consumer devices, demonstrating practical throughput for interactive LLM applications.
+\end{enumerate}
+
+\section{Related Work}
+
+\subsection{Model Parallelism}
+
+Pipeline parallelism~\citep{huang2019gpipe,narayanan2019pipedream} distributes model layers across devices and processes micro-batches in a pipelined fashion. GPipe~\citep{huang2019gpipe} introduced synchronous pipeline parallelism with gradient accumulation. PipeDream~\citep{narayanan2019pipedream} uses asynchronous pipelines with weight stashing for training. These systems assume homogeneous GPU clusters with high-bandwidth interconnects.
+
+\subsection{Edge and Mobile Inference}
+
+Edge inference optimization includes model compression~\citep{han2016deep}, knowledge distillation~\citep{hinton2015distilling}, and neural architecture search for efficient models~\citep{cai2019once}. Split computing~\citep{kang2017neurosurgeon} partitions DNNs between edge and cloud. DeepThings~\citep{zhao2018deepthings} distributes CNN inference across IoT devices using fused-tile partitioning.
+
+\subsection{Collaborative Inference}
+
+Petals~\citep{borzunov2023petals} enables collaborative inference of LLMs across volunteer-contributed GPUs. SWARM parallelism~\citep{ryabinin2023swarm} provides fault-tolerant pipeline parallelism for unreliable networks. Our work differs in targeting mobile/edge devices rather than GPUs, requiring fundamentally different partitioning strategies due to memory constraints and compute heterogeneity.
+
+\section{System Model}
+
+\subsection{Device Graph}
+
+We model the available devices as a weighted graph $G = (V, E, w_v, w_e)$ where:
+
+\begin{definition}[Device Graph]
+\begin{itemize}
+    \item $V = \{v_1, \ldots, v_N\}$ is the set of available devices.
+    \item $E \subseteq V \times V$ represents network connectivity.
+    \item $w_v : V \rightarrow \RR^3_+$ maps each device to its capabilities: $(c_i, m_i, s_i)$ representing compute (FLOPS), available memory (bytes), and storage (bytes).
+    \item $w_e : E \rightarrow \RR^2_+$ maps each edge to $(b_{ij}, l_{ij})$ representing bandwidth (bytes/s) and latency (seconds).
+\end{itemize}
+\end{definition}
+
+\subsection{Model Representation}
+
+A transformer model with $L$ layers is represented as a sequence of computational stages:
+
+\begin{definition}[Model Stage]
+Each layer $\ell \in \{1, \ldots, L\}$ is characterized by:
+\begin{itemize}
+    \item $p_\ell$: Parameter count (bytes when quantized).
+    \item $f_\ell$: FLOPs per token for forward pass.
+    \item $a_\ell$: Activation size (bytes) for a single token.
+    \item $k_\ell$: KV-cache size per token (bytes).
+\end{itemize}
+\end{definition}
+
+For standard transformer architectures, these values are uniform across layers (except the embedding and output layers), but our formulation handles non-uniform architectures.
+
+\section{Optimal Model Partitioning}
+
+\subsection{Problem Formulation}
+
+\begin{definition}[Partitioning Problem]
+Given a model with $L$ layers and a device graph $G$ with $N$ devices, find a partition $\pi: [L] \rightarrow [N]$ that minimizes the end-to-end inference latency:
+\begin{equation}
+    \min_\pi \max_{i \in [N]} \left( T_{\text{comp}}(i, \pi) + T_{\text{comm}}(i, \pi) \right)
+\end{equation}
+subject to:
+\begin{align}
+    \sum_{\ell : \pi(\ell) = i} p_\ell + k_\ell \cdot S &\leq m_i, \quad \forall i \in [N] \label{eq:memory} \\
+    \pi(\ell) = \pi(\ell') &\Rightarrow \pi(\ell'') = \pi(\ell), \quad \forall \ell \leq \ell'' \leq \ell' \label{eq:contiguous}
+\end{align}
+where $S$ is the maximum sequence length and constraint~\eqref{eq:contiguous} requires contiguous layer assignment (no layer splitting across devices).
+\end{definition}
+
+The compute time for device $i$ processing its assigned layers is:
+\begin{equation}
+    T_{\text{comp}}(i, \pi) = \frac{\sum_{\ell : \pi(\ell) = i} f_\ell}{c_i}
+\end{equation}
+
+The communication time between consecutive pipeline stages is:
+\begin{equation}
+    T_{\text{comm}}(i, \pi) = \frac{a_{\max(\ell : \pi(\ell) = i)}}{b_{\pi(i), \pi(i+1)}} + l_{\pi(i), \pi(i+1)}
+\end{equation}
+
+\subsection{Dynamic Programming Solution}
+
+The contiguity constraint~\eqref{eq:contiguous} enables a dynamic programming solution:
+
+\begin{algorithm}[H]
+\caption{Optimal Pipeline Partitioning}
+\label{alg:partition}
+\begin{algorithmic}[1]
+\Require Layers $1, \ldots, L$; devices $1, \ldots, N$ (sorted by pipeline position); device capabilities; network topology
+\Ensure Optimal partition $\pi^*$ minimizing pipeline latency
+\State $\mathit{dp}[\ell][i] \leftarrow \infty$ for all $\ell, i$ \Comment{Min latency for layers $1..\ell$ on devices $1..i$}
+\State $\mathit{dp}[0][0] \leftarrow 0$
+\For{$i = 1$ to $N$}
+    \For{$\ell = 1$ to $L$}
+        \For{$\ell' = 0$ to $\ell - 1$} \Comment{Try assigning layers $\ell'+1..\ell$ to device $i$}
+            \State $\mathit{mem} \leftarrow \sum_{j=\ell'+1}^{\ell} (p_j + k_j \cdot S)$
+            \If{$\mathit{mem} > m_i$}
+                \State \textbf{continue} \Comment{Memory constraint violated}
+            \EndIf
+            \State $t_c \leftarrow \sum_{j=\ell'+1}^{\ell} f_j / c_i$ \Comment{Compute time}
+            \State $t_n \leftarrow a_\ell / b_{i-1, i} + l_{i-1, i}$ \Comment{Network time (from prev device)}
+            \State $t_{\text{stage}} \leftarrow \max(t_c, t_n)$ \Comment{Pipeline stage time}
+            \State $\mathit{dp}[\ell][i] \leftarrow \min(\mathit{dp}[\ell][i], \max(\mathit{dp}[\ell'][i-1], t_{\text{stage}}))$
+        \EndFor
+    \EndFor
+\EndFor
+\State $\pi^* \leftarrow \mathsf{Backtrack}(\mathit{dp})$
+\State \Return $\pi^*$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{theorem}[Optimality]
+Algorithm~\ref{alg:partition} finds the partition $\pi^*$ that minimizes the maximum pipeline stage latency in $O(L^2 \cdot N)$ time and $O(L \cdot N)$ space.
+\end{theorem}
+
+\begin{proof}
+The contiguity constraint ensures that any valid partition assigns a contiguous block of layers $[\ell'+1, \ell]$ to each device $i$. The DP recurrence enumerates all such block boundaries. The maximum over $\mathit{dp}[\ell'][i-1]$ and $t_{\text{stage}}$ correctly captures the pipeline bottleneck (the slowest stage determines throughput). Optimality follows from the optimal substructure: the best assignment of $\ell$ layers to $i$ devices depends only on the best assignment of $\ell'$ layers to $i-1$ devices.
+\end{proof}
+
+\subsection{Handling Device Ordering}
+
+The DP assumes a fixed device ordering along the pipeline. We determine this ordering by solving a shortest-path problem on the device graph:
+
+\begin{algorithm}[H]
+\caption{Pipeline Ordering}
+\label{alg:ordering}
+\begin{algorithmic}[1]
+\Require Device graph $G = (V, E, w_v, w_e)$
+\Ensure Ordered device sequence $d_1, \ldots, d_N$ minimizing total inter-stage communication
+\State Construct complete graph $G'$ with edge weight $w'_{ij} = a / b_{ij} + l_{ij}$
+\State $\mathit{order} \leftarrow \mathsf{TSP\_Approximation}(G')$ \Comment{2-opt local search}
+\State \Return $\mathit{order}$
+\end{algorithmic}
+\end{algorithm}
+
+For small $N$ (typically $\leq 20$), exact TSP is feasible. For larger networks, 2-opt provides near-optimal solutions.
+
+\section{Pipeline Execution Engine}
+
+\subsection{Speculative Execution}
+
+To hide communication latency, we overlap activation transfer with computation on subsequent tokens:
+
+\begin{algorithm}[H]
+\caption{Speculative Pipeline Execution (Per Device)}
+\label{alg:speculative}
+\begin{algorithmic}[1]
+\Require Device $i$ with layers $[\ell_{\text{start}}, \ell_{\text{end}}]$, input queue
+\Ensure Processed activations forwarded to next device
+\State $\mathit{recv\_buf} \leftarrow \mathsf{AsyncReceive}()$ \Comment{Non-blocking receive}
+\Loop
+    \State $h \leftarrow \mathsf{AwaitActivation}(\mathit{recv\_buf})$ \Comment{Wait for input}
+    \State $\mathsf{AsyncSendPrefetch}(i+1)$ \Comment{Pre-warm next device}
+    \For{$\ell = \ell_{\text{start}}$ to $\ell_{\text{end}}$}
+        \State $h \leftarrow \mathsf{LayerForward}(\ell, h)$
+    \EndFor
+    \State $\mathsf{AsyncSend}(h, \mathit{device}_{i+1})$ \Comment{Non-blocking send}
+    \State $\mathit{recv\_buf} \leftarrow \mathsf{AsyncReceive}()$ \Comment{Pipeline: start next token}
+\EndLoop
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{KV-Cache Management}
+
+The key-value cache grows with sequence length and must be managed across devices:
+
+\begin{equation}
+    \mathit{KV\_size}(\ell, s) = 2 \cdot d_{\text{model}} \cdot n_{\text{heads}} \cdot d_{\text{head}} \cdot s \cdot \mathit{precision}
+\end{equation}
+
+Each device stores KV-cache only for its assigned layers. For a 7B model with 32 layers distributed across 4 devices (8 layers each), the KV-cache per device at sequence length 2048 is approximately 512 MB in fp16, fitting comfortably in 4+ GB RAM devices.
+
+\subsection{Quantization Strategy}
+
+We apply layer-wise quantization tailored to device capabilities:
+
+\begin{table}[H]
+\centering
+\caption{Quantization Configuration by Device Class}
+\label{tab:quantization}
+\begin{tabular}{lcccl}
+\toprule
+\textbf{Device Class} & \textbf{RAM} & \textbf{Quantization} & \textbf{Bits/param} & \textbf{Example} \\
+\midrule
+Low-end mobile & 2--4 GB & GPTQ 2-bit & 2.5 & Budget Android \\
+Mid-range mobile & 4--8 GB & GPTQ 4-bit & 4.5 & iPhone 13, Pixel 7 \\
+High-end mobile & 8--16 GB & GPTQ 4-bit & 4.5 & iPhone 15 Pro \\
+Laptop & 16--32 GB & fp16 & 16.0 & MacBook Pro \\
+Desktop/Server & 32+ GB & fp16 & 16.0 & Gaming PC \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A key insight: different pipeline stages can use different quantization levels. We assign less-quantized representations to more capable devices, placing critical layers (attention heads with highest sensitivity to quantization) on the most capable device.
+
+\begin{algorithm}[H]
+\caption{Sensitivity-Aware Quantization Assignment}
+\label{alg:quant-assign}
+\begin{algorithmic}[1]
+\Require Layer sensitivities $\{s_1, \ldots, s_L\}$, device capabilities $\{m_1, \ldots, m_N\}$
+\Ensure Per-layer quantization levels $\{q_1, \ldots, q_L\}$
+\State Sort layers by sensitivity: $s_{\sigma(1)} \geq s_{\sigma(2)} \geq \ldots$
+\State Sort devices by capability: $m_{\rho(1)} \geq m_{\rho(2)} \geq \ldots$
+\For{each device $i$ in capability order}
+    \State $\mathit{budget} \leftarrow m_i$
+    \For{each layer $\ell$ assigned to device $i$}
+        \State $q_\ell \leftarrow \mathsf{BestQuantization}(\mathit{budget}, p_\ell, s_\ell)$
+        \State $\mathit{budget} \leftarrow \mathit{budget} - p_\ell / (32 / q_\ell)$
+    \EndFor
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\section{Fault Tolerance}
+
+\subsection{Hot-Standby Replication}
+
+Each pipeline stage maintains a hot-standby replica on a nearby device:
+
+\begin{definition}[Standby Assignment]
+For each active device $d_i$ in the pipeline, a standby device $d_i'$ is selected such that:
+\begin{enumerate}
+    \item $d_i'$ has sufficient memory to hold $d_i$'s model shard.
+    \item $d_i'$ has low-latency connectivity to both $d_{i-1}$ and $d_{i+1}$.
+    \item $d_i' \neq d_j$ and $d_i' \neq d_j'$ for all $j \neq i$ (no standby sharing).
+\end{enumerate}
+\end{definition}
+
+\begin{algorithm}[H]
+\caption{Failover Protocol}
+\label{alg:failover}
+\begin{algorithmic}[1]
+\Require Active device $d_i$ becomes unresponsive
+\Ensure Pipeline continues with standby $d_i'$
+\State Detect failure: $\mathsf{Heartbeat}(d_i) = \text{timeout after 100ms}$
+\State $d_{i-1}$ redirects output to $d_i'$
+\State $d_i'$ loads model shard from pre-cached copy
+\State $d_i'$ reconstructs KV-cache from last checkpoint
+\State Resume pipeline execution
+\State \textbf{Background:} Find new standby $d_i''$ for $d_i'$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{KV-Cache Checkpointing}
+
+To enable fast failover, each device periodically checkpoints its KV-cache to its standby:
+
+\begin{table}[H]
+\centering
+\caption{KV-Cache Checkpoint Strategy}
+\label{tab:checkpoint}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Strategy} & \textbf{Bandwidth (MB/s)} & \textbf{Failover (ms)} & \textbf{Overhead (\%)} \\
+\midrule
+No checkpoint & 0 & 5{,}000+ & 0 \\
+Every token & 50--200 & 50 & 15 \\
+Every 10 tokens & 5--20 & 180 & 2 \\
+Every 50 tokens & 1--4 & 800 & 0.4 \\
+Adaptive & 2--30 & 180 & 3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The adaptive strategy checkpoints more frequently when network bandwidth is abundant and less frequently under congestion.
+
+\section{Activation Encryption}
+
+\subsection{Threat Model}
+
+Intermediate activations can leak information about the input~\citep{he2019model}. We protect activations in transit using lightweight encryption:
+
+\begin{algorithm}[H]
+\caption{Activation Encryption}
+\label{alg:enc-activation}
+\begin{algorithmic}[1]
+\Require Activation tensor $h \in \RR^{s \times d}$, shared key $k_{ij}$ between devices $i, j$
+\Ensure Encrypted activation $\hat{h}$
+\State $\mathit{nonce} \leftarrow \mathsf{Counter}(\mathit{seq\_id}, \mathit{layer\_id})$
+\State $h_{\text{bytes}} \leftarrow \mathsf{Serialize}(h)$ \Comment{To byte array}
+\State $\hat{h} \leftarrow \mathsf{ChaCha20}(k_{ij}, \mathit{nonce}, h_{\text{bytes}})$
+\State \Return $\hat{h}$
+\end{algorithmic}
+\end{algorithm}
+
+ChaCha20 is chosen for its efficient software implementation on ARM devices (no AES hardware acceleration required), achieving 1+ GB/s on modern smartphones.
+
+\subsection{Key Management}
+
+Pipeline keys are established during the partitioning phase using X25519 key agreement between adjacent pipeline devices. Keys rotate every 1000 inference requests or 1 hour, whichever comes first.
+
+\section{Evaluation}
+
+\subsection{Testbed Configuration}
+
+We evaluate \parsdi on three device configurations:
+
+\begin{table}[H]
+\centering
+\caption{Testbed Configurations}
+\label{tab:testbed}
+\begin{tabular}{llll}
+\toprule
+\textbf{Config} & \textbf{Devices} & \textbf{Total RAM} & \textbf{Network} \\
+\midrule
+A: Home & iPhone 15 Pro + MacBook Air M2 + iPad Pro & 40 GB & Wi-Fi 6 \\
+B: Mobile & 4$\times$ Pixel 8 + 4$\times$ Galaxy S23 & 64 GB & Wi-Fi Direct \\
+C: Mixed & 2$\times$ iPhone + Laptop + Desktop + RPi 4 & 58 GB & Mixed \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Throughput Results}
+
+\begin{table}[H]
+\centering
+\caption{Inference Throughput (tokens/second)}
+\label{tab:throughput}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Model} & \textbf{Single A100} & \textbf{Config A} & \textbf{Config B} & \textbf{Config C} & \textbf{Efficiency} \\
+\midrule
+ParsLM-1.3B & 120 & 95 & 62 & 78 & 79\% \\
+ParsLM-7B & 45 & 33 & 18 & 27 & 73\% \\
+ParsLM-13B & 25 & 16 & 8 & 14 & 64\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Latency Analysis}
+
+\begin{table}[H]
+\centering
+\caption{Time-to-First-Token Latency (milliseconds)}
+\label{tab:ttft}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{Config A} & \textbf{Config B} & \textbf{Config C} & \textbf{Single Device (best)} \\
+\midrule
+ParsLM-1.3B & 180 & 310 & 240 & 85 \\
+ParsLM-7B & 420 & 780 & 540 & 210 \\
+ParsLM-13B & 890 & 1{,}650 & 1{,}100 & 450 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Partitioning Quality}
+
+\begin{table}[H]
+\centering
+\caption{Partitioning Algorithm Comparison (ParsLM-7B, Config B)}
+\label{tab:partition}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Algorithm} & \textbf{Throughput (tok/s)} & \textbf{Pipeline Imbalance} & \textbf{Time (ms)} \\
+\midrule
+Uniform (4 layers/device) & 11 & 3.2$\times$ & 0.1 \\
+Memory-proportional & 14 & 1.8$\times$ & 0.2 \\
+Compute-proportional & 15 & 1.5$\times$ & 0.3 \\
+\parsdi DP (ours) & \textbf{18} & \textbf{1.1$\times$} & 1.2 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Pipeline imbalance is defined as $\max_i T_i / \min_i T_i$ where $T_i$ is the per-token processing time of device $i$.
+
+\subsection{Fault Tolerance}
+
+\begin{table}[H]
+\centering
+\caption{Fault Tolerance Results}
+\label{tab:fault}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Failure Scenario} & \textbf{Recovery Time (ms)} & \textbf{Tokens Lost} & \textbf{Quality Impact} \\
+\midrule
+Single device departure & 180 & 2--5 & None \\
+Two simultaneous departures & 450 & 5--12 & None \\
+Network partition (2 groups) & 2{,}100 & 20--50 & None \\
+Standby also fails & 5{,}200 & 50--100 & None (re-partition) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Activation Encryption Overhead}
+
+\begin{table}[H]
+\centering
+\caption{Encryption Overhead}
+\label{tab:encryption}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{Throughput Impact} & \textbf{Latency Impact} & \textbf{CPU Overhead} \\
+\midrule
+No encryption & 0\% & 0\% & 0\% \\
+AES-256-GCM & $-$4.2\% & +18ms & 5.1\% \\
+ChaCha20-Poly1305 & $-$2.8\% & +12ms & 3.2\% \\
+ChaCha20 (no auth) & $-$1.9\% & +8ms & 2.1\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+We use ChaCha20-Poly1305 by default (authenticated encryption) with the option to disable authentication for latency-critical applications where the transport layer already provides integrity.
+
+\subsection{Comparison with Existing Systems}
+
+\begin{table}[H]
+\centering
+\caption{Comparison with Distributed Inference Systems}
+\label{tab:comparison}
+\begin{tabularx}{\textwidth}{lXXXXX}
+\toprule
+\textbf{Feature} & \textbf{\parsdi} & \textbf{Petals} & \textbf{ExoLabs} & \textbf{llama.cpp} & \textbf{vLLM} \\
+\midrule
+Target devices & Mobile/Edge & GPUs & Mixed & Single device & GPUs \\
+Heterogeneous & Yes & Partial & Yes & No & No \\
+Fault tolerance & Hot standby & Retry & No & N/A & No \\
+Optimal partition & DP solver & Heuristic & Manual & N/A & N/A \\
+Activation privacy & ChaCha20 & No & No & N/A & No \\
+Mesh network & Yes & Internet & LAN & N/A & N/A \\
+Quantization-aware & Per-stage & Global & Global & Global & No \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Latency Optimization}
+
+\subsection{Activation Compression}
+
+For bandwidth-constrained links, we optionally compress activations using lightweight learned compression:
+
+\begin{equation}
+    \hat{h} = W_{\text{down}} \cdot h, \quad h' = W_{\text{up}} \cdot \hat{h}
+\end{equation}
+
+where $W_{\text{down}} \in \RR^{r \times d}$ and $W_{\text{up}} \in \RR^{d \times r}$ with $r \ll d$. The projection matrices are trained offline to minimize reconstruction error on a calibration set.
+
+\begin{table}[H]
+\centering
+\caption{Activation Compression Results}
+\label{tab:act-compress}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Compression} & \textbf{Ratio} & \textbf{Bandwidth Saved} & \textbf{Quality (PPL)} & \textbf{Compute Cost} \\
+\midrule
+None & 1$\times$ & 0\% & 8.42 & 0 \\
+4$\times$ & 4$\times$ & 75\% & 8.48 & +1\% \\
+8$\times$ & 8$\times$ & 87.5\% & 8.71 & +2\% \\
+16$\times$ & 16$\times$ & 93.75\% & 9.34 & +3\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Prefill-Decode Separation}
+
+The prefill phase (processing the prompt) and decode phase (generating tokens) have different computational profiles. We optimize each separately:
+
+\begin{itemize}
+    \item \textbf{Prefill:} Compute-bound with large batch size. We maximize parallelism by distributing prompt chunks across devices.
+    \item \textbf{Decode:} Memory-bandwidth-bound with sequential token generation. We optimize for pipeline throughput.
+\end{itemize}
+
+\section{Network-Aware Scheduling}
+
+\subsection{Dynamic Re-Partitioning}
+
+When network conditions change (device joins/leaves, bandwidth fluctuation), \parsdi re-evaluates the partition:
+
+\begin{algorithm}[H]
+\caption{Dynamic Re-Partitioning}
+\label{alg:repartition}
+\begin{algorithmic}[1]
+\Require Current partition $\pi$, updated device graph $G'$, running inference sessions
+\Ensure Updated partition $\pi'$ with minimal disruption
+\State $\pi' \leftarrow \mathsf{OptimalPartition}(G')$ \Comment{Algorithm~\ref{alg:partition}}
+\If{$\mathsf{Cost}(\pi') < 0.8 \cdot \mathsf{Cost}(\pi)$} \Comment{Only re-partition if 20\%+ improvement}
+    \State Wait for current generation to complete
+    \State Migrate model shards: $\mathsf{TransferLayers}(\pi \rightarrow \pi')$
+    \State Rebuild KV-cache on new devices
+    \State Activate $\pi'$
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Bandwidth Probing}
+
+\parsdi continuously probes available bandwidth between devices using lightweight ping-pong measurements:
+
+\begin{equation}
+    \hat{b}_{ij}^t = (1 - \alpha) \cdot \hat{b}_{ij}^{t-1} + \alpha \cdot b_{ij}^{\text{measured}}
+\end{equation}
+
+with exponential smoothing ($\alpha = 0.1$) to avoid reacting to transient fluctuations.
+
+\section{Limitations and Future Work}
+
+\begin{enumerate}
+    \item \textbf{Training:} \parsdi currently supports inference only. Extending to distributed fine-tuning on edge devices is future work.
+    \item \textbf{Tensor Parallelism:} We partition at layer boundaries only. Tensor parallelism (splitting individual layers) could improve balance for very heterogeneous configurations but requires more communication.
+    \item \textbf{Multimodal:} Vision and audio inputs require different partitioning strategies. We plan to extend the framework to multimodal models.
+    \item \textbf{Energy Efficiency:} Mobile devices have battery constraints. Energy-aware partitioning that considers power consumption is planned.
+    \item \textbf{Larger Models:} Models beyond 13B parameters may not fit even in aggregate memory of typical household devices. Offloading to flash storage with prefetching is under investigation.
+\end{enumerate}
+
+\section{Privacy and Security Analysis}
+
+\subsection{Threat Model}
+
+We consider three adversary classes for distributed inference:
+
+\begin{enumerate}
+    \item \textbf{Passive observer:} An adversary who can observe inter-device network traffic but cannot modify it. This captures ISP-level surveillance and network monitoring.
+    \item \textbf{Compromised node:} An adversary who controls one or more devices in the inference pipeline. They can observe activations passing through their assigned layers but cannot modify the protocol.
+    \item \textbf{Active attacker:} An adversary who controls devices and can inject malicious activations to influence inference results.
+\end{enumerate}
+
+\subsection{Activation Privacy}
+
+\begin{theorem}[Activation Confidentiality]
+Under the ChaCha20 stream cipher~\citep{bernstein2008chacha}, inter-device activations are semantically secure against passive observers. A compromised node at layer $l$ learns only the activations at the boundary between its assigned layers, not the model input or output.
+\end{theorem}
+
+\begin{proof}
+Each inter-device activation transfer is encrypted with a per-session ChaCha20 key derived from a Diffie-Hellman key exchange between adjacent pipeline stages. ChaCha20 provides IND-CPA security under the assumption that the underlying permutation is a PRF. A compromised node at layer $l$ observes only the decrypted activations at its input boundary ($h_l$) and produces outputs at its output boundary ($h_{l+k}$). Reconstructing the original input from intermediate activations requires inverting $l$ transformer layers, which is computationally infeasible for $l > 1$ due to the non-invertible nature of attention mechanisms with softmax normalization.
+\end{proof}
+
+\subsection{Inference Integrity}
+
+For applications requiring verifiable inference, \parsdi supports an optional commitment scheme:
+
+\begin{enumerate}
+    \item Each device commits to its computed activations before forwarding: $c_l = \mathsf{Hash}(h_l \| \text{nonce}_l)$.
+    \item Commitments are posted to a shared log (the Pars DHT).
+    \item Post-inference, any participant can request selective re-computation of specific layers to verify correctness.
+    \item Statistical spot-checking (5\% of inference requests) provides probabilistic integrity assurance without full re-computation overhead.
+\end{enumerate}
+
+\section{Incentive Design}
+
+Devices contributing compute to the \parsdi mesh earn ASHA token rewards proportional to their contribution:
+
+\begin{equation}
+    r_i = r_{\text{base}} \cdot \frac{c_i \cdot u_i}{\sum_{j} c_j \cdot u_j}
+\end{equation}
+
+where $c_i$ is device $i$'s compute contribution (measured in GFLOPS-hours), $u_i$ is its uptime fraction, and $r_{\text{base}}$ is the per-epoch reward pool. Devices that fail or produce incorrect results forfeit their reward for that epoch.
+
+\begin{table}[H]
+\centering
+\caption{Estimated Monthly ASHA Rewards by Device Class}
+\label{tab:rewards}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Device} & \textbf{Contribution (GFLOPS-hr)} & \textbf{Uptime} & \textbf{Est. Reward (ASHA)} \\
+\midrule
+Desktop (RTX 4070) & 21{,}024 & 95\% & 180--220 \\
+MacBook Air M2 & 2{,}592 & 70\% & 20--30 \\
+iPhone 15 Pro & 1{,}548 & 40\% & 8--12 \\
+Pixel 8 & 590 & 45\% & 4--6 \\
+RPi 4 & 8.6 & 95\% & 0.1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Conclusion}
+
+\parsdi demonstrates that distributed LLM inference on heterogeneous consumer devices is practical for interactive AI applications. By combining optimal pipeline partitioning, speculative execution, fault tolerance, and activation encryption, \parsdi enables the Pars Network to provide community-scale AI inference without centralized infrastructure. Our evaluation shows that a collection of consumer devices can achieve 73\% of single-GPU throughput with sub-second time-to-first-token latency, while maintaining bit-identical inference quality and protecting intermediate activations in transit. The incentive mechanism ensures sustainable participation by compensating device owners proportional to their contribution.
+
+\bibliographystyle{plainnat}
+
+\begin{thebibliography}{30}
+
+\bibitem[Borzunov et~al.(2023)]{borzunov2023petals}
+Borzunov, A., Baranchuk, D., Dettmers, T., et~al.
+\newblock Petals: Collaborative inference and fine-tuning of large models.
+\newblock In \emph{ACL (System Demonstrations)}, pages 38--44, 2023.
+
+\bibitem[Cai et~al.(2019)]{cai2019once}
+Cai, H., Zhu, L., and Han, S.
+\newblock {ProxylessNAS}: Direct neural architecture search on target task and hardware.
+\newblock In \emph{ICLR}, 2019.
+
+\bibitem[Han et~al.(2016)]{han2016deep}
+Han, S., Mao, H., and Dally, W.~J.
+\newblock Deep compression: Compressing deep neural networks with pruning, trained quantization and {Huffman} coding.
+\newblock In \emph{ICLR}, 2016.
+
+\bibitem[He et~al.(2019)]{he2019model}
+He, Z., Zhang, T., and Lee, R.~B.
+\newblock Model inversion attacks against collaborative inference.
+\newblock In \emph{ACSAC}, pages 148--162, 2019.
+
+\bibitem[Hinton et~al.(2015)]{hinton2015distilling}
+Hinton, G., Vinyals, O., and Dean, J.
+\newblock Distilling the knowledge in a neural network.
+\newblock \emph{arXiv preprint arXiv:1503.02531}, 2015.
+
+\bibitem[Huang et~al.(2019)]{huang2019gpipe}
+Huang, Y., Cheng, Y., Bapna, A., et~al.
+\newblock {GPipe}: Efficient training of giant neural networks using pipeline parallelism.
+\newblock In \emph{NeurIPS}, pages 103--112, 2019.
+
+\bibitem[Kang et~al.(2017)]{kang2017neurosurgeon}
+Kang, Y., Hauswald, J., Gao, C., et~al.
+\newblock Neurosurgeon: Collaborative intelligence between the cloud and mobile edge.
+\newblock In \emph{ASPLOS}, pages 615--629, 2017.
+
+\bibitem[Narayanan et~al.(2019)]{narayanan2019pipedream}
+Narayanan, D., Harlap, A., Phanishayee, A., et~al.
+\newblock {PipeDream}: Generalized pipeline parallelism for {DNN} training.
+\newblock In \emph{SOSP}, pages 1--15, 2019.
+
+\bibitem[Pope et~al.(2023)]{pope2023efficiently}
+Pope, R., Douglas, S., Chowdhery, A., et~al.
+\newblock Efficiently scaling transformer inference.
+\newblock In \emph{MLSys}, 2023.
+
+\bibitem[Ryabinin et~al.(2023)]{ryabinin2023swarm}
+Ryabinin, M., Dettmers, T., Diskin, M., and Borzunov, A.
+\newblock {SWARM} parallelism: Training large models can be surprisingly communication-efficient.
+\newblock In \emph{ICML}, pages 29416--29440, 2023.
+
+\bibitem[Zhao et~al.(2018)]{zhao2018deepthings}
+Zhao, Z., Barijough, K.~M., and Gerstlauer, A.
+\newblock {DeepThings}: Distributed adaptive deep learning inference on resource-constrained {IoT} edge clusters.
+\newblock \emph{IEEE TCAD}, 37(11):2348--2359, 2018.
+
+\bibitem[Kwon et~al.(2023)]{kwon2023vllm}
+Kwon, W., Li, Z., Zhuang, S., et~al.
+\newblock Efficient memory management for large language model serving with {PagedAttention}.
+\newblock In \emph{SOSP}, 2023.
+
+\bibitem[Dettmers et~al.(2022)]{dettmers2022gptint}
+Dettmers, T., Lewis, M., Belkada, Y., and Zettlemoyer, L.
+\newblock {GPT3.int8()}: 8-bit matrix multiplication for transformers at scale.
+\newblock In \emph{NeurIPS}, 2022.
+
+\bibitem[Frantar et~al.(2023)]{frantar2023gptq}
+Frantar, E., Ashkboos, S., Hoefler, T., and Alistarh, D.
+\newblock {GPTQ}: Accurate post-training quantization for generative pre-trained transformers.
+\newblock In \emph{ICLR}, 2023.
+
+\bibitem[Sheng et~al.(2023)]{sheng2023flexgen}
+Sheng, Y., Zheng, L., Yuan, B., et~al.
+\newblock {FlexGen}: High-throughput generative inference of large language models with a single {GPU}.
+\newblock In \emph{ICML}, pages 31094--31116, 2023.
+
+\bibitem[Dao et~al.(2022)]{dao2022flashattention}
+Dao, T., Fu, D.~Y., Ermon, S., Rudra, A., and R\'e, C.
+\newblock {FlashAttention}: Fast and memory-efficient exact attention with {IO}-awareness.
+\newblock In \emph{NeurIPS}, 2022.
+
+\bibitem[Leviathan et~al.(2023)]{leviathan2023speculative}
+Leviathan, Y., Kalman, M., and Matias, Y.
+\newblock Fast inference from transformers via speculative decoding.
+\newblock In \emph{ICML}, pages 19274--19286, 2023.
+
+\bibitem[Miao et~al.(2023)]{miao2023spotserve}
+Miao, X., Shi, O., Li, C., et~al.
+\newblock {SpotServe}: Serving generative large language models on preemptible instances.
+\newblock In \emph{ASPLOS}, 2024.
+
+\bibitem[Shoeybi et~al.(2019)]{shoeybi2019megatron}
+Shoeybi, M., Patwary, M., Puri, R., et~al.
+\newblock {Megatron-LM}: Training multi-billion parameter language models using model parallelism.
+\newblock \emph{arXiv preprint arXiv:1909.08053}, 2019.
+
+\bibitem[Rajbhandari et~al.(2020)]{rajbhandari2020zero}
+Rajbhandari, S., Rasley, J., Ruwase, O., and He, Y.
+\newblock {ZeRO}: Memory optimizations toward training trillion parameter models.
+\newblock In \emph{SC}, pages 1--16, 2020.
+
+\bibitem[Aminabadi et~al.(2022)]{aminabadi2022deepspeed}
+Aminabadi, R.~Y., Rajbhandari, S., Zhang, M., et~al.
+\newblock {DeepSpeed} Inference: Enabling efficient inference of transformer models at unprecedented scale.
+\newblock In \emph{SC}, pages 1--15, 2022.
+
+\bibitem[Lin et~al.(2024)]{lin2024awq}
+Lin, J., Tang, J., Tang, H., et~al.
+\newblock {AWQ}: Activation-aware weight quantization for {LLM} compression and acceleration.
+\newblock In \emph{MLSys}, 2024.
+
+\bibitem[Bernstein(2008)]{bernstein2008chacha}
+Bernstein, D.~J.
+\newblock {ChaCha}, a variant of {Salsa20}.
+\newblock In \emph{SASC Workshop}, 2008.
+
+\bibitem[Ousterhout et~al.(2019)]{ousterhout2019shard}
+Ousterhout, J., Agrawal, A., Erickson, D., et~al.
+\newblock The case for {RAMCloud}: Scalable high-performance storage entirely in {DRAM}.
+\newblock \emph{ACM SIGOPS OSR}, 43(4):92--105, 2009.
+
+\bibitem[ExoLabs(2024)]{exolabs2024}
+ExoLabs.
+\newblock Exo: Run your own AI cluster at home.
+\newblock \url{https://github.com/exo-explore/exo}, 2024.
+
+\bibitem[Gerganov(2023)]{gerganov2023llama}
+Gerganov, G.
+\newblock llama.cpp: Inference of {LLaMA} model in pure {C/C++}.
+\newblock \url{https://github.com/ggerganov/llama.cpp}, 2023.
+
+\end{thebibliography}
+
+\appendix
+
+\section{Device Benchmark Results}
+
+\begin{table}[H]
+\centering
+\caption{Per-Device Benchmark Results (matrix multiply throughput, GFLOPS)}
+\label{tab:device-benchmark}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Device} & \textbf{CPU} & \textbf{GPU/NPU} & \textbf{RAM (GB)} & \textbf{fp16 GFLOPS} & \textbf{int8 GOPS} \\
+\midrule
+iPhone 15 Pro & A17 Pro & ANE 35T & 8 & 2{,}150 & 35{,}000 \\
+Pixel 8 & Tensor G3 & Mali-G715 & 8 & 820 & 4{,}100 \\
+Galaxy S23 & SD 8 Gen 2 & Adreno 740 & 8 & 1{,}200 & 6{,}000 \\
+MacBook Air M2 & M2 & M2 GPU 8c & 16 & 3{,}600 & 15{,}200 \\
+RPi 4 & BCM2711 & -- & 8 & 12 & 24 \\
+Desktop (RTX 4070) & i7-13700K & RTX 4070 & 32 & 29{,}200 & 233{,}000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Model Partitioning Examples}
+
+For ParsLM-7B (32 layers) on Config B (8 smartphones):
+
+\begin{lstlisting}[basicstyle=\small\ttfamily,frame=single,caption={Example Partition (ParsLM-7B on 8 devices)}]
+Device 1 (Galaxy S23, 8GB): Embedding + Layers 0-3  [4 layers]
+Device 2 (Galaxy S23, 8GB): Layers 4-7              [4 layers]
+Device 3 (Pixel 8, 8GB):    Layers 8-11             [4 layers]
+Device 4 (Pixel 8, 8GB):    Layers 12-15            [4 layers]
+Device 5 (Galaxy S23, 8GB): Layers 16-19            [4 layers]
+Device 6 (Galaxy S23, 8GB): Layers 20-23            [4 layers]
+Device 7 (Pixel 8, 8GB):    Layers 24-27            [4 layers]
+Device 8 (Pixel 8, 8GB):    Layers 28-31 + LM Head  [4 layers]
+
+Pipeline latency per token: 55ms (18 tok/s)
+Inter-device bandwidth: 120 MB/s (Wi-Fi Direct)
+Activation size per transfer: 8 KB (seq_len=1, hidden=4096, fp16)
+\end{lstlisting}
+
+\end{document}

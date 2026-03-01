@@ -1,0 +1,618 @@
+\documentclass[11pt,letterpaper]{article}
+\usepackage{shared/parscover}
+
+% ============================================================================
+% Staking and Validator Economics for Pars Network
+% Pars Network Technical Whitepaper PNP-013
+% ============================================================================
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{abstract}
+
+\geometry{margin=1in}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=green!50!black,
+    urlcolor=blue!60!black
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!10},
+    keywordstyle=\bfseries,
+    commentstyle=\itshape,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=5pt
+}
+
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc}
+
+\newtheorem{definition}{Definition}[section]
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{corollary}{Corollary}[section]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Cyrus Pahlavi, Pars Team}
+\fancyhead[R]{\small Staking Economics}
+\fancyfoot[C]{\thepage}
+
+% ============================================================================
+\title{%
+    \textbf{Staking and Validator Economics\\
+    for Pars Network}\\[0.5em]
+    \large Pars Network Technical Whitepaper PNP-013
+}
+
+\author{%
+    Zach Kelling\\
+    Pars DAO\\
+    \texttt{research@pars.dev}\\[0.5em]
+    \small Version 1.0
+}
+
+\date{2026}
+
+% ============================================================================
+\begin{document}
+\parscoverpage
+
+\thispagestyle{fancy}
+
+% ============================================================================
+\begin{abstract}
+\noindent
+We present the staking and validator economics for the Pars Network,
+extending the VEASHA tokenomics framework with concrete staking
+mechanisms, validator incentives, slashing conditions, delegation, and
+privacy-preserving stake proofs.  Pars validators secure the
+privacy-preserving consensus layer (PNP-012) while maintaining
+anonymity---a requirement that conflicts with traditional staking designs
+where validator stakes are publicly visible.  We introduce
+zero-knowledge stake proofs that demonstrate sufficient stake for
+validator eligibility without revealing the exact amount or the
+staker's identity.  The economic model incentivises geographic
+distribution across diaspora jurisdictions, penalises correlation
+(validators in the same jurisdiction or hosting provider), and provides
+a delegation mechanism that preserves delegator privacy.  Slashing
+conditions are designed for the coercion-resistant threat model: a
+validator under duress can trigger panic mode without being slashed for
+the resulting protocol deviation.
+\end{abstract}
+
+\vspace{1em}
+\noindent\textbf{Keywords:} staking, validator economics, VEASHA,
+slashing, delegation, zero-knowledge stake proofs, geographic
+distribution, coercion-resistant slashing
+
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Proof-of-stake networks secure consensus through economic bonds:
+validators lock tokens as collateral, earning rewards for honest
+participation and risking slashing for protocol violations.  The Pars
+Network's privacy requirements introduce unique constraints on staking
+design:
+
+\begin{enumerate}
+    \item \textbf{Stake privacy.}  Public stake amounts create power
+    maps that adversaries use to identify high-value targets for
+    coercion.  Validator stakes must be hidden.
+    \item \textbf{Identity privacy.}  Validators participate
+    anonymously (PNP-012).  Staking must not break anonymity.
+    \item \textbf{Coercion tolerance.}  Slashing rules must
+    accommodate panic-mode behaviour (PNP-005) without penalising
+    coerced validators.
+    \item \textbf{Geographic distribution.}  The diaspora is distributed
+    across 60+ countries; staking incentives must encourage this
+    distribution rather than concentrating in low-cost hosting regions.
+\end{enumerate}
+
+\subsection{Relation to VEASHA Tokenomics}
+
+The VEASHA (Vote-Escrow ASHA) tokenomics paper defines the token
+distribution, emission schedule, and governance voting power.  This
+paper extends VEASHA with:
+
+\begin{itemize}
+    \item Concrete staking and unstaking mechanics.
+    \item Validator reward distribution.
+    \item Slashing conditions and dispute resolution.
+    \item Delegation with privacy preservation.
+    \item Zero-knowledge stake eligibility proofs.
+\end{itemize}
+
+\subsection{Contributions}
+
+\begin{itemize}
+    \item Zero-knowledge stake proofs for private validator eligibility.
+    \item Correlation-penalised rewards encouraging geographic diversity.
+    \item Coercion-aware slashing with panic-mode exceptions.
+    \item Private delegation via stealth staking addresses.
+    \item Formal analysis of economic security under the Pars threat model.
+\end{itemize}
+
+% ============================================================================
+\section{VEASHA Staking}
+\label{sec:veasha}
+
+\subsection{Token Mechanics}
+
+ASHA is the native token of the Pars Network.  VEASHA (vote-escrow ASHA)
+is obtained by locking ASHA for a period $T$:
+
+\begin{definition}[VEASHA Balance]
+    A user locking $a$ ASHA for period $T$ (in weeks) receives VEASHA
+    balance:
+    \[
+        \mathsf{veASHA}(a, T) = a \cdot \frac{T}{T_{\max}}
+    \]
+    where $T_{\max} = 208$ weeks (4 years).  VEASHA balance decays
+    linearly as the lock approaches expiry.
+\end{definition}
+
+\subsection{Validator Registration}
+
+To become a validator, a participant must:
+
+\begin{enumerate}
+    \item Lock at least $S_{\min}$ ASHA as VEASHA, where $S_{\min}$ is
+    the minimum stake (initially 10{,}000 ASHA).
+    \item Generate a validator key pair and register the public key on
+    the Pars L2 staking contract.
+    \item Generate a ZK proof of stake eligibility
+    (Section~\ref{sec:zkstake}).
+    \item Begin participating in consensus (PNP-012).
+\end{enumerate}
+
+The registration transaction links the VEASHA position to the validator
+key via a commitment, without revealing the stake amount.
+
+% ============================================================================
+\section{Zero-Knowledge Stake Proofs}
+\label{sec:zkstake}
+
+\subsection{Motivation}
+
+Traditional proof-of-stake systems publish validator stakes on-chain,
+enabling stake-weighted leader election and reward distribution.  This
+transparency is a liability for Pars: an adversary monitoring the
+staking contract can identify the largest stakers and target them for
+coercion.
+
+\subsection{Construction}
+
+We use a Groth16 proof (infrastructure from PNP-006) to prove stake
+eligibility without revealing the amount.
+
+\begin{definition}[Stake Eligibility Proof]
+    Given a VEASHA commitment $C = \mathsf{Commit}(a, T, r)$ on-chain,
+    the validator produces a ZK proof $\pi$ of the statement:
+    \[
+        \exists\, a, T, r : C = \mathsf{Commit}(a, T, r)
+        \;\wedge\; a \cdot T / T_{\max} \geq S_{\min}
+    \]
+    The proof reveals nothing beyond the fact that the committed VEASHA
+    balance exceeds $S_{\min}$.
+\end{definition}
+
+\subsection{Stake Ranges for Weighted Sampling}
+
+Consensus (PNP-012) requires stake-weighted validator sampling.
+Revealing exact weights breaks privacy.  Instead, we define stake
+ranges:
+
+\begin{table}[h]
+\centering
+\caption{Stake ranges for weighted consensus sampling.}
+\label{tab:ranges}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Tier} & \textbf{VEASHA Range} & \textbf{Sampling Weight} \\
+\midrule
+Bronze  & $[S_{\min}, 3 S_{\min})$ & 1 \\
+Silver  & $[3 S_{\min}, 10 S_{\min})$ & 3 \\
+Gold    & $[10 S_{\min}, 30 S_{\min})$ & 8 \\
+Diamond & $\geq 30 S_{\min}$ & 15 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Validators prove membership in a tier via a range proof, revealing only
+the tier, not the exact amount.
+
+\begin{theorem}[Tier Privacy]
+    Under the ZK proof soundness and zero-knowledge properties, the
+    adversary learns only the validator's tier, not their exact stake.
+    Within a tier, all validators are indistinguishable.
+\end{theorem}
+
+% ============================================================================
+\section{Validator Rewards}
+\label{sec:rewards}
+
+\subsection{Emission Schedule}
+
+Block rewards follow the VEASHA emission schedule: a decreasing emission
+rate starting at 5\% annual inflation, halving every 4 years, with a
+hard cap of 1 billion ASHA.
+
+\begin{definition}[Block Reward]
+    The reward for block $b$ at epoch $e$ is:
+    \[
+        R(b, e) = R_0 \cdot 2^{-e/E_{\mathrm{half}}} \cdot \frac{1}{B_e}
+    \]
+    where $R_0$ is the initial annual emission, $E_{\mathrm{half}}$ is
+    the halving period in epochs, and $B_e$ is the number of blocks in
+    epoch $e$.
+\end{definition}
+
+\subsection{Reward Distribution}
+
+Rewards are distributed proportionally to sampling weight, adjusted by
+two factors:
+
+\paragraph{Uptime factor.}
+\[
+    f_{\mathrm{up}}(V_i) = \frac{\text{blocks participated}}{
+    \text{blocks eligible}} \cdot \mathbf{1}[
+    f_{\mathrm{up}} \geq 0.9]
+\]
+Validators below 90\% uptime receive zero rewards for that epoch.
+
+\paragraph{Diversity factor.}
+\[
+    f_{\mathrm{div}}(V_i) = 1 - \alpha \cdot \frac{
+    n_{\mathrm{same}}(V_i)}{n_{\mathrm{total}}}
+\]
+where $n_{\mathrm{same}}(V_i)$ is the number of validators sharing
+the same jurisdiction or AS number as $V_i$, and $\alpha$ is a
+correlation penalty parameter (initially $\alpha = 0.5$).
+
+\begin{definition}[Validator Reward]
+    Validator $V_i$ with tier weight $w_i$, uptime factor
+    $f_{\mathrm{up}}(V_i)$, and diversity factor $f_{\mathrm{div}}(V_i)$
+    receives epoch reward:
+    \[
+        r_i = R_{\mathrm{epoch}} \cdot
+        \frac{w_i \cdot f_{\mathrm{up}}(V_i) \cdot f_{\mathrm{div}}(V_i)}{
+        \sum_j w_j \cdot f_{\mathrm{up}}(V_j) \cdot f_{\mathrm{div}}(V_j)}
+    \]
+\end{definition}
+
+\subsection{Geographic Distribution Incentive}
+
+The diversity factor penalises validator concentration.  If 30\% of
+validators are in a single jurisdiction, each receives a 15\% reward
+reduction ($\alpha = 0.5$, $n_{\mathrm{same}}/n_{\mathrm{total}} = 0.3$).
+This incentivises validators to distribute across diaspora hubs.
+
+\begin{proposition}[Nash Equilibrium]
+    Under the diversity-adjusted reward function, the Nash equilibrium
+    validator distribution approximates the uniform distribution over
+    available jurisdictions, weighted by the diaspora population
+    distribution.
+\end{proposition}
+
+% ============================================================================
+\section{Slashing}
+\label{sec:slashing}
+
+\subsection{Slashable Offences}
+
+\begin{table}[h]
+\centering
+\caption{Slashing conditions and penalties.}
+\label{tab:slashing}
+\begin{tabular}{@{}llr@{}}
+\toprule
+\textbf{Offence} & \textbf{Evidence} & \textbf{Penalty} \\
+\midrule
+Double signing   & Two signatures at same height & 5\% \\
+Prolonged downtime ($>$48h) & Missing from $>$48h of blocks & 1\% \\
+Equivocation     & Conflicting votes in same round & 10\% \\
+Censorship (proven) & Inclusion proof violation & 3\% \\
+Correlated failure & $>$1/3 same-AS validators fail & 2$\times$ base \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Coercion-Aware Slashing}
+
+Standard slashing penalises protocol deviations indiscriminately.  Under
+the Pars threat model, a coerced validator may deviate from the protocol
+involuntarily.
+
+\begin{definition}[Panic-Mode Exception]
+    A validator in panic mode (PNP-005) whose protocol deviation matches
+    the panic-mode behaviour profile is exempt from slashing.  The panic
+    mode produces:
+    \begin{enumerate}[label=(\roman*)]
+        \item Valid signatures under the decoy key (not equivocation).
+        \item Graceful withdrawal from consensus (not prolonged downtime
+        if within 24h).
+        \item Alert to the guardian network (PNP-010) for key resharing.
+    \end{enumerate}
+\end{definition}
+
+\begin{theorem}[Coercion Safety]
+    A coerced validator who activates panic mode is not slashed, provided:
+    (a)~the panic credential is valid, (b)~the deviation matches the
+    panic behaviour profile, and (c)~key resharing completes within 24h.
+\end{theorem}
+
+\subsection{Correlated Slashing}
+
+Correlated failures---multiple validators failing simultaneously due to
+shared infrastructure---indicate systemic risk.  Pars applies a
+superlinear penalty:
+
+\[
+    \mathsf{slash}(V_i) = \mathsf{base\_penalty} \cdot
+    \min\!\left(3,\; 1 + \frac{|\{V_j : \text{correlated with } V_i\}|}{
+    n/3}\right)
+\]
+
+This incentivises infrastructure diversity: validators sharing a hosting
+provider or jurisdiction face amplified slashing risk.
+
+% ============================================================================
+\section{Delegation}
+\label{sec:delegation}
+
+\subsection{Privacy-Preserving Delegation}
+
+ASHA holders who do not wish to run validators can delegate their stake.
+Delegation must preserve delegator privacy: the delegator's identity,
+delegation amount, and choice of validator should not be publicly
+visible.
+
+\begin{definition}[Stealth Delegation]
+    A delegator sends ASHA to a stealth staking address derived from
+    the validator's public staking key, using the stealth address
+    mechanism of PNP-007:
+    \begin{enumerate}[label=(\roman*)]
+        \item Delegator generates ephemeral key $r$ and computes
+        stealth address $A_s = H(r \cdot V_{\mathrm{pub}}) \cdot G +
+        V_{\mathrm{stake}}$.
+        \item Delegator sends ASHA to $A_s$ with a VEASHA lock.
+        \item Validator detects the delegation by scanning with their
+        staking key.
+        \item The delegation is invisible to external observers.
+    \end{enumerate}
+\end{definition}
+
+\subsection{Reward Distribution to Delegators}
+
+Validators distribute rewards to delegators via stealth payments:
+
+\begin{enumerate}
+    \item The validator computes each delegator's share based on their
+    delegation weight.
+    \item Rewards are sent to fresh stealth addresses derived from each
+    delegator's viewing key.
+    \item The on-chain observer sees only transfers between unlinkable
+    addresses.
+\end{enumerate}
+
+\subsection{Delegation Commission}
+
+Validators set a commission rate $c \in [0, 0.20]$ (max 20\%).  The
+commission is enforced by the staking contract:
+
+\[
+    r_{\mathrm{delegator}} = r_{\mathrm{total}} \cdot
+    \frac{d_i}{\sum_j d_j + s_{\mathrm{self}}} \cdot (1 - c)
+\]
+
+where $d_i$ is the delegator's stake and $s_{\mathrm{self}}$ is the
+validator's self-stake.
+
+% ============================================================================
+\section{Unstaking and Withdrawal}
+\label{sec:unstaking}
+
+\subsection{Unbonding Period}
+
+Unstaking requires an unbonding period of 14 days.  During unbonding:
+\begin{itemize}
+    \item The stake remains subject to slashing for offences committed
+    before the unstaking request.
+    \item The validator is removed from the active set.
+    \item No rewards accrue.
+\end{itemize}
+
+\subsection{Emergency Unstaking}
+
+Under the coercion model, a validator under threat may need to unstake
+immediately.  Emergency unstaking is permitted with:
+\begin{itemize}
+    \item A 5\% early withdrawal penalty (burned, not redistributed).
+    \item A valid panic credential (PNP-005).
+    \item Guardian network confirmation (PNP-010).
+\end{itemize}
+
+% ============================================================================
+\section{Economic Security Analysis}
+\label{sec:security}
+
+\subsection{Cost of Attack}
+
+\begin{definition}[Byzantine Threshold Cost]
+    The cost for an adversary to control $f = \lfloor (n-1)/3 \rfloor$
+    validators is:
+    \[
+        C_{\mathrm{attack}} = f \cdot S_{\min} \cdot P_{\mathrm{ASHA}}
+        + C_{\mathrm{infra}}(f)
+    \]
+    where $P_{\mathrm{ASHA}}$ is the market price of ASHA and
+    $C_{\mathrm{infra}}$ is infrastructure cost.
+\end{definition}
+
+With $n = 100$ validators and $S_{\min} = 10{,}000$ ASHA, the
+adversary must acquire and lock at least 330{,}000 ASHA, plus maintain
+33 geographically distributed validator nodes.
+
+\subsection{Stake Concentration Bound}
+
+\begin{theorem}[Diversity Equilibrium]
+    Under the diversity-adjusted reward function with $\alpha = 0.5$,
+    no rational validator operator controls more than
+    $\lceil n / J \rceil$ validators, where $J$ is the number of
+    available jurisdictions.
+\end{theorem}
+
+\begin{proof}
+    An operator adding a validator in a jurisdiction where they already
+    operate $k$ validators receives reward factor
+    $1 - 0.5 \cdot (k+1) / n_{\mathrm{local}}$.  When $k$ exceeds the
+    jurisdiction's proportional share, the marginal reward becomes
+    negative relative to operating in an unoccupied jurisdiction.
+\end{proof}
+
+\subsection{Long-Range Attack Resistance}
+
+VEASHA's time-locked staking prevents long-range attacks: an adversary
+cannot unstake, sell tokens, and then attempt to rewrite history with
+worthless keys.  The 14-day unbonding period exceeds the finality
+horizon.
+
+% ============================================================================
+\section{Governance Integration}
+\label{sec:governance}
+
+VEASHA balances determine governance voting power as defined in the
+VEASHA tokenomics paper.  Staking extends this:
+
+\begin{itemize}
+    \item \textbf{Validator governance.}  Validators have additional
+    governance rights: proposing protocol upgrades, adjusting staking
+    parameters ($S_{\min}$, $\alpha$, commission caps).
+    \item \textbf{Delegator governance.}  Delegators retain governance
+    voting power proportional to their delegation, independent of the
+    validator's vote.
+    \item \textbf{Slashing governance.}  Disputed slashing events are
+    resolved by VEASHA-weighted governance vote via the DAO (PNP-001
+    governance).
+\end{itemize}
+
+% ============================================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Ethereum PoS.}  Ethereum's proof-of-stake uses 32 ETH minimum
+stake with public validator identities.  Pars differs in requiring
+validator anonymity and private stake amounts.
+
+\paragraph{Penumbra.}  Penumbra~\cite{penumbra2023} provides private
+staking on a Cosmos chain.  Pars adopts a similar ZK stake proof
+approach but extends it with coercion-aware slashing and geographic
+diversity incentives.
+
+\paragraph{Lux Staking.}  The Lux network's staking provides the
+validator registry infrastructure.  Pars validators are registered as
+a subnet on Lux, inheriting the P-chain's validator management with
+Pars-specific privacy extensions.
+
+\paragraph{Curve veTokenomics.}  Curve's vote-escrowed CRV model
+inspired VEASHA.  Pars extends the model with ZK proofs over the lock
+position and staking-specific reward adjustments.
+
+% ============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have presented the staking and validator economics for the Pars
+Network, extending the VEASHA tokenomics with concrete mechanisms for
+private staking, validator rewards, coercion-aware slashing, and
+privacy-preserving delegation.  Zero-knowledge stake proofs enable
+validator eligibility verification without revealing stake amounts,
+while geographic diversity incentives encourage validator distribution
+across the diaspora.  The coercion-aware slashing framework
+accommodates the unique threat model of communities operating under
+authoritarian surveillance, ensuring that validators under duress are
+not economically punished for activating panic protocols.
+
+% ============================================================================
+\begin{thebibliography}{99}
+
+\bibitem{buterin2020pos}
+V.~Buterin et al.,
+``Combining GHOST and Casper,''
+\emph{arXiv:2003.03052}, 2020.
+
+\bibitem{penumbra2023}
+Penumbra Labs,
+``Penumbra: A Private Proof-of-Stake Network,''
+2023.
+
+\bibitem{curve2020ve}
+Curve Finance,
+``Curve DAO: Vote-Escrowed CRV,''
+2020.
+
+\bibitem{veasha}
+Cyrus Pahlavi, Pars Team,
+``VEASHA Tokenomics: Vote-Escrow Economic Model for Pars Network,''
+2026.
+
+\bibitem{pnp005}
+Cyrus Pahlavi, Pars Team,
+``PNP-005: Coercion-Resistant Protocols for Governance Under
+Authoritarian Surveillance,''
+2026.
+
+\bibitem{pnp006}
+Cyrus Pahlavi, Pars Team,
+``PNP-006: Zero-Knowledge Identity: Privacy-Preserving Authentication,''
+2026.
+
+\bibitem{pnp007}
+Cyrus Pahlavi, Pars Team,
+``PNP-007: Stealth Addresses for Pars Network,''
+2026.
+
+\bibitem{pnp010}
+Cyrus Pahlavi, Pars Team,
+``PNP-010: Threshold Signatures for Pars Network Infrastructure,''
+2026.
+
+\bibitem{pnp012}
+Cyrus Pahlavi, Pars Team,
+``PNP-012: Privacy-Preserving Consensus for Pars Network,''
+2026.
+
+\bibitem{pars_dao}
+Cyrus Pahlavi, Pars Team,
+``Pars DAO Governance: Decentralised Autonomous Organisation for the
+Persian Diaspora,''
+2026.
+
+\end{thebibliography}
+
+\end{document}

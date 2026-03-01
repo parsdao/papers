@@ -1,0 +1,43 @@
+% parscover.sty — Monochrome cover page for Pars Network papers
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{parscover}[2026/04/05 Pars Research Cover Page]
+
+\RequirePackage{tikz}
+\RequirePackage{xcolor}
+\RequirePackage{graphicx}
+\RequirePackage[margin=1in]{geometry}
+
+\newcommand{\parscoverpage}{%
+  \newgeometry{margin=0pt}
+  \thispagestyle{empty}
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[black] (current page.south west) rectangle (current page.north east);
+    % Pars symbol — simple circle
+    \node at ([yshift=4.5cm]current page.center) {%
+      \begin{tikzpicture}[scale=1.0]
+        \draw[white, line width=1.5pt] (0,0) circle (0.5);
+        \fill[white] (0,0) circle (0.15);
+      \end{tikzpicture}%
+    };
+    \node[white, font=\fontsize{18}{22}\selectfont\bfseries,
+          text width=12cm, align=center]
+      at ([yshift=1.5cm]current page.center)
+      {\hyphenpenalty=10000\exhyphenpenalty=10000\@title};
+    \draw[white!30, line width=0.4pt]
+      ([yshift=0.2cm,xshift=-4cm]current page.center) --
+      ([yshift=0.2cm,xshift=4cm]current page.center);
+    \node[white!50, font=\fontsize{9}{11}\selectfont]
+      at ([yshift=-0.6cm]current page.center) {\@author};
+    \node[white!30, font=\fontsize{8}{10}\selectfont]
+      at ([yshift=-1.4cm]current page.center) {\@date};
+    \node[white!20, font=\fontsize{7}{9}\selectfont, anchor=south]
+      at ([yshift=0.6cm]current page.south) {Pars Network};
+    \node[white!20, font=\fontsize{6}{8}\selectfont, anchor=south east]
+      at ([xshift=-0.8cm,yshift=0.6cm]current page.south east) {RESEARCH};
+  \end{tikzpicture}
+  \restoregeometry
+  \newpage
+}
+
+\let\parscover\parscoverpage
+\let\luxcoverpage\parscoverpage

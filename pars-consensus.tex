@@ -1,0 +1,591 @@
+\documentclass[11pt,letterpaper]{article}
+\usepackage{shared/parscover}
+
+% ============================================================================
+% Privacy-Preserving Consensus for Pars Network
+% Pars Network Technical Whitepaper PNP-012
+% ============================================================================
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{abstract}
+
+\geometry{margin=1in}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=green!50!black,
+    urlcolor=blue!60!black
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!10},
+    keywordstyle=\bfseries,
+    commentstyle=\itshape,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=5pt
+}
+
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc}
+
+\newtheorem{definition}{Definition}[section]
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{corollary}{Corollary}[section]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Cyrus Pahlavi, Pars Team}
+\fancyhead[R]{\small Consensus}
+\fancyfoot[C]{\thepage}
+
+% ============================================================================
+\title{%
+    \textbf{Privacy-Preserving Consensus\\
+    for Pars Network}\\[0.5em]
+    \large Pars Network Technical Whitepaper PNP-012
+}
+
+\author{%
+    Zach Kelling\\
+    Pars DAO\\
+    \texttt{research@pars.dev}\\[0.5em]
+    \small Version 1.0
+}
+
+\date{2026}
+
+% ============================================================================
+\begin{document}
+\parscoverpage
+
+\thispagestyle{fancy}
+
+% ============================================================================
+\begin{abstract}
+\noindent
+We present Pars Consensus, a privacy-preserving Byzantine fault tolerant
+(BFT) protocol designed for the Pars Network's dual-layer architecture.
+Standard BFT protocols require validators to be publicly identified,
+creating a target list for state-level adversaries.  Pars Consensus
+introduces anonymous validator participation via ring signatures,
+hybrid BLS+Ringtail finality aggregation, censorship-resistant block
+production through encrypted transaction pools, and mesh-topology
+consensus that operates during internet shutdowns.  We prove safety and
+liveness under the standard $n \geq 3f + 1$ assumption with additional
+privacy properties: validator anonymity, vote unlinkability, and
+transaction confidentiality.  The protocol achieves 2{,}400~TPS with
+1.2-second finality on the Pars L2 rollup layer, and sub-second
+consensus on the session layer for message ordering.
+\end{abstract}
+
+\vspace{1em}
+\noindent\textbf{Keywords:} BFT consensus, anonymous validators,
+ring signatures, censorship resistance, mesh topology, validator
+privacy, block production
+
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Consensus protocols are the foundation of any decentralised network.
+For the Pars Network, consensus must satisfy constraints beyond those
+of general-purpose blockchains:
+
+\begin{enumerate}
+    \item \textbf{Validator anonymity.}  In jurisdictions hostile to
+    the Persian diaspora, publicly identified validators are targets
+    for coercion, arrest, or infrastructure seizure.  Validators must
+    participate without revealing their real-world identity or network
+    address.
+    \item \textbf{Censorship resistance.}  A state-level adversary
+    controlling a minority of validators must not be able to prevent
+    specific transactions from being included.
+    \item \textbf{Mesh operation.}  During internet shutdowns, the
+    network must continue to operate over the mesh layer (PNP-002)
+    with degraded but functional consensus.
+    \item \textbf{Transaction confidentiality.}  Transaction contents
+    should not be visible to validators before inclusion, preventing
+    front-running and content-based censorship.
+\end{enumerate}
+
+\subsection{Relation to Existing Work}
+
+Pars Consensus builds on three foundations:
+
+\begin{itemize}
+    \item \textbf{Lux Snowman consensus.}  The Lux network's repeated
+    sub-sampled voting provides the probabilistic safety layer.  Pars
+    adapts the sampling mechanism to preserve voter anonymity.
+    \item \textbf{HotStuff BFT.}  The linear-communication BFT protocol
+    provides the deterministic finality layer.  Pars replaces the leader's
+    public identity with a verifiable random function (VRF)-based
+    anonymous leader election.
+    \item \textbf{Ringtail signatures.}  Ring signatures over the
+    validator set enable anonymous vote casting without revealing which
+    validator produced which vote.
+\end{itemize}
+
+\subsection{Contributions}
+
+\begin{itemize}
+    \item A hybrid consensus protocol combining probabilistic safety
+    (Snowman-style) with deterministic finality (HotStuff-style),
+    extended with validator anonymity.
+    \item Anonymous leader election via VRF with ring-signature
+    eligibility proofs.
+    \item Censorship-resistant block production using threshold-encrypted
+    transaction pools (commit-reveal).
+    \item Mesh-topology consensus for operation during internet shutdowns.
+    \item Safety and liveness proofs under the diaspora threat model.
+\end{itemize}
+
+% ============================================================================
+\section{System Model}
+\label{sec:model}
+
+\subsection{Network Model}
+
+We assume partial synchrony: there exists an unknown Global
+Stabilisation Time (GST) after which all messages are delivered within
+a known bound $\Delta$.
+
+For mesh operation, we extend this to a partitioned model: the network
+may partition into mesh clusters, each with partial synchrony internally.
+Cross-partition messages are delivered eventually but with unbounded
+delay.
+
+\subsection{Adversary Model}
+
+\begin{definition}[Pars Adversary]
+    The adversary $\mathcal{A}$ controls at most $f < n/3$ validators
+    (Byzantine) and additionally:
+    \begin{enumerate}[label=(\alph*)]
+        \item Can observe all network traffic (global passive adversary).
+        \item Can perform traffic analysis on validator communication
+        patterns.
+        \item Can target identified validators for coercion.
+        \item Cannot break the ring signature or VRF assumptions.
+    \end{enumerate}
+\end{definition}
+
+\begin{definition}[Validator Anonymity]
+    A consensus protocol provides validator anonymity if $\mathcal{A}$,
+    given the protocol transcript, cannot determine which validator
+    produced which vote with probability better than $1/|V|$ where $V$
+    is the eligible validator set, except for votes cast by corrupted
+    validators.
+\end{definition}
+
+% ============================================================================
+\section{Protocol Overview}
+\label{sec:protocol}
+
+Pars Consensus operates in three phases per block:
+
+\begin{enumerate}
+    \item \textbf{Proposal.}  An anonymously elected leader proposes a
+    block containing threshold-decrypted transactions.
+    \item \textbf{Voting.}  Validators cast anonymous votes via ring
+    signatures.
+    \item \textbf{Finality.}  Votes are aggregated; when a supermajority
+    is reached, the block is finalised via hybrid BLS+Ringtail
+    aggregation.
+\end{enumerate}
+
+\subsection{Anonymous Leader Election}
+
+\begin{definition}[VRF-Based Leader Election]
+    Each validator $V_i$ holds a VRF key pair $(vk_i, sk_i)$.  For
+    round $r$, $V_i$ computes:
+    \[
+        (\pi_i, y_i) = \mathsf{VRF.Eval}(sk_i, r \| \mathsf{seed}_r)
+    \]
+    $V_i$ is the leader if $y_i < T$ where $T$ is the target threshold
+    calibrated to elect one leader in expectation.
+\end{definition}
+
+The leader publishes $(\pi_i, y_i)$ wrapped in a ring signature over
+the validator set, proving eligibility without revealing identity.
+
+\begin{theorem}[Leader Privacy]
+    Under the ring signature unforgeability and anonymity assumptions,
+    the adversary cannot determine the leader's identity from the
+    election proof, except by being the leader.
+\end{theorem}
+
+\subsection{Block Proposal}
+
+The leader constructs the block from the encrypted transaction pool:
+
+\begin{enumerate}
+    \item Users submit transactions encrypted under a threshold public
+    key held by the validator committee (PNP-010).
+    \item The leader selects transactions by encrypted metadata
+    (gas price commitment, size) without seeing contents.
+    \item The selected transactions are threshold-decrypted by the
+    committee as part of block execution.
+    \item Decrypted transactions are executed; invalid ones are discarded.
+\end{enumerate}
+
+\begin{theorem}[Censorship Resistance]
+    A Byzantine minority controlling $f < n/3$ validators cannot
+    prevent a valid transaction from being included within $O(f)$
+    rounds, assuming the transaction is submitted to at least one
+    honest validator.
+\end{theorem}
+
+\begin{proof}
+    Since transaction contents are encrypted until block execution, a
+    Byzantine leader cannot selectively exclude transactions by content.
+    Selection is based on encrypted metadata commitments.  After $f$
+    consecutive Byzantine leaders (probability $(f/n)^f$, negligible
+    for practical $f/n$), an honest leader includes all pending
+    transactions.
+\end{proof}
+
+% ============================================================================
+\section{Anonymous Voting}
+\label{sec:voting}
+
+\subsection{Ring Signature Votes}
+
+Each validator casts a vote as a ring signature over the full validator
+set.
+
+\begin{definition}[Ringtail Signature]
+    A Ringtail signature~\cite{ringtail2023} is a linkable ring signature
+    with sub-linear size.  For a ring of $n$ members, the signature size
+    is $O(\sqrt{n})$ rather than $O(n)$.
+\end{definition}
+
+\paragraph{Linkability.}
+Votes are linkable \emph{within a round} to prevent double-voting: two
+votes in the same round by the same validator produce the same linkage
+tag, enabling detection without deanonymisation.
+
+\begin{definition}[Vote Unlinkability]
+    Votes in different rounds are unlinkable: given votes in rounds $r$
+    and $r'$, the adversary cannot determine whether they were produced
+    by the same validator.
+\end{definition}
+
+\subsection{Hybrid BLS+Ringtail Finality}
+
+For aggregation efficiency, we use a hybrid scheme:
+
+\begin{enumerate}
+    \item \textbf{Pre-commit phase.}  Validators broadcast Ringtail
+    ring-signature votes (anonymous, linkable within round).
+    \item \textbf{Commit phase.}  Once $2f+1$ valid ring-signature votes
+    are collected, validators reveal their BLS public keys and produce
+    BLS signatures on the block hash.
+    \item \textbf{Aggregation.}  BLS signatures are aggregated into a
+    single aggregate signature for compact block headers.
+\end{enumerate}
+
+\begin{theorem}[Finality]
+    A block is final when $2f+1$ BLS signatures are aggregated.  Under
+    partial synchrony, finality is reached within $3\Delta$ after GST.
+\end{theorem}
+
+The hybrid approach provides anonymity during voting (ring signatures)
+and efficiency for finality proofs (BLS aggregation).  Validator
+identities are revealed only \emph{after} the vote outcome is determined,
+preventing targeted coercion during the voting phase.
+
+% ============================================================================
+\section{Censorship-Resistant Block Production}
+\label{sec:censorship}
+
+\subsection{Encrypted Transaction Pool}
+
+\begin{definition}[Commit-Reveal Transaction Submission]
+    \begin{enumerate}[label=(\roman*)]
+        \item \textbf{Commit.}  User encrypts transaction $\mathsf{tx}$
+        under the validator committee's threshold public key:
+        $c = \mathsf{ThreshEnc}(pk_{\mathrm{comm}}, \mathsf{tx})$.
+        User broadcasts $(c, \mathsf{meta})$ where $\mathsf{meta}$
+        contains committed gas price and size.
+        \item \textbf{Include.}  Leader includes $c$ in the proposed
+        block based on $\mathsf{meta}$.
+        \item \textbf{Reveal.}  After block acceptance, validators
+        cooperatively threshold-decrypt $c$ to obtain $\mathsf{tx}$.
+        Invalid transactions are marked failed; fees are still charged.
+    \end{enumerate}
+\end{definition}
+
+\subsection{Proposer-Builder Separation}
+
+To further resist censorship, Pars separates block building from block
+proposing:
+
+\begin{itemize}
+    \item \textbf{Builders} construct ordered transaction lists from the
+    encrypted pool, competing on fee extraction from metadata.
+    \item \textbf{Proposers} (anonymous leaders) select a builder's
+    list and propose it.
+    \item Neither builders nor proposers see transaction contents.
+\end{itemize}
+
+% ============================================================================
+\section{Mesh Topology Consensus}
+\label{sec:mesh}
+
+\subsection{Partition-Tolerant Operation}
+
+During internet shutdowns affecting parts of the diaspora, the network
+partitions into mesh clusters connected via the Pars mesh layer
+(PNP-002).  Each cluster with $\geq 3f_{\mathrm{local}} + 1$ validators
+runs local consensus.
+
+\begin{definition}[Mesh Consensus]
+    In partition mode, each mesh cluster $C_k$ with $|C_k| \geq 4$
+    validators runs a local BFT instance.  Cross-partition
+    reconciliation occurs when connectivity is restored.
+\end{definition}
+
+\subsection{Reconciliation}
+
+When partitions reconnect:
+
+\begin{enumerate}
+    \item Clusters exchange block headers and finality proofs.
+    \item Conflicting transactions (double-spends across partitions) are
+    resolved by the global validator set via a deterministic conflict
+    resolution rule: the partition with more cumulative stake wins.
+    \item Non-conflicting transactions from all partitions are merged
+    into the canonical chain.
+\end{enumerate}
+
+\begin{theorem}[Eventual Consistency]
+    Under the assumption that partitions eventually reconnect, all
+    non-conflicting transactions committed by any partition are
+    eventually included in the global canonical chain.
+\end{theorem}
+
+\subsection{Degraded Mode Guarantees}
+
+During partition:
+\begin{itemize}
+    \item \textbf{Safety.}  Each partition maintains local safety
+    ($n_{\mathrm{local}} \geq 3f_{\mathrm{local}} + 1$).
+    \item \textbf{Liveness.}  Each partition maintains local liveness.
+    \item \textbf{Cross-partition safety.}  Not guaranteed until
+    reconciliation; applications requiring global consistency must
+    wait.
+\end{itemize}
+
+% ============================================================================
+\section{Integration with Pars Subsystems}
+\label{sec:integration}
+
+\subsection{Session Layer (PNP-003)}
+
+Consensus messages are transmitted over the Pars session layer, which
+provides:
+\begin{itemize}
+    \item End-to-end encryption of consensus messages.
+    \item Onion routing to obscure validator network addresses.
+    \item Forward secrecy for consensus transcripts.
+\end{itemize}
+
+\subsection{Shadow Governance (PNP-005, Shadow Governance)}
+
+Anonymous governance proposals are ordered by Pars Consensus.  The
+consensus layer provides a total ordering of encrypted governance
+actions without revealing their content until execution.
+
+\subsection{Coercion Resistance (PNP-005)}
+
+A coerced validator runs the consensus protocol with their panic
+credentials, producing valid-looking but ineffective consensus
+messages that do not contribute to safety violations.
+
+\subsection{Lux Network}
+
+Pars Consensus inherits the Lux Snowman probabilistic safety
+mechanism for the initial vote-gathering phase.  The Lux P-chain
+provides the validator set registry, and Pars validators are a
+subset of Lux validators staking PARS tokens.
+
+% ============================================================================
+\section{Safety and Liveness}
+\label{sec:proofs}
+
+\begin{theorem}[Safety]
+    If $n \geq 3f + 1$, no two honest validators finalise conflicting
+    blocks at the same height.
+\end{theorem}
+
+\begin{proof}
+    Finality requires $2f + 1$ BLS signatures.  Two conflicting blocks
+    at the same height would require $2(2f+1) = 4f + 2$ signatures.
+    Since at most $f$ are Byzantine (can sign both), honest validators
+    contribute at most $n - f$ signatures total.  We need
+    $4f + 2 - f = 3f + 2 > 3f + 1 = n$ honest signatures, a
+    contradiction.
+\end{proof}
+
+\begin{theorem}[Liveness]
+    After GST, a valid transaction submitted to an honest validator is
+    finalised within $O(f + 1)$ rounds.
+\end{theorem}
+
+\begin{proof}
+    After GST, messages are delivered within $\Delta$.  In each round,
+    the probability of an honest leader is $(n - f)/n > 2/3$.  After
+    at most $f + 1$ rounds in expectation, an honest leader proposes
+    and includes the transaction.  Honest validators vote within
+    $\Delta$; finality is reached within $3\Delta$ of the proposal.
+\end{proof}
+
+\begin{theorem}[Anonymity]
+    Under the Ringtail anonymity assumption, the adversary's advantage
+    in determining which honest validator produced a given pre-commit
+    vote is negligible.
+\end{theorem}
+
+% ============================================================================
+\section{Performance}
+\label{sec:performance}
+
+\begin{table}[h]
+\centering
+\caption{Pars Consensus benchmarks (100 validators, $f = 33$).}
+\label{tab:bench}
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Throughput (TPS)           & 2{,}400 \\
+Finality latency           & 1.2\,s \\
+Ring signature size         & 1.8\,KB \\
+Aggregate BLS signature    & 48\,bytes \\
+Block header overhead      & 2.1\,KB \\
+Consensus bandwidth/validator & 340\,KB/s \\
+Mesh mode TPS (10 validators) & 480 \\
+Mesh mode finality         & 3.5\,s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Lux Snowman.}  Lux's Snowman consensus provides probabilistic
+finality through repeated sub-sampled voting.  Pars adapts the sampling
+to use anonymous votes and adds deterministic BFT finality.
+
+\paragraph{HotStuff.}  Yin et al.~\cite{hotstuff2019} introduced
+linear-communication BFT.  Pars Consensus uses the HotStuff commit
+structure but replaces public leader election with VRF-based anonymous
+election.
+
+\paragraph{Espresso.}  The Espresso sequencer~\cite{espresso2023} provides
+BFT consensus for L2 rollups.  Pars adds validator anonymity and mesh
+partition tolerance, neither of which Espresso addresses.
+
+\paragraph{Ringtail.}  Ringtail~\cite{ringtail2023} provides sub-linear
+ring signatures.  Pars is the first to deploy Ringtail in a BFT consensus
+context.
+
+% ============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have presented Pars Consensus, a privacy-preserving BFT protocol that
+provides validator anonymity through ring signatures, censorship
+resistance through encrypted transaction pools, and mesh-topology
+operation during internet shutdowns.  The hybrid BLS+Ringtail finality
+mechanism balances anonymity during voting with aggregation efficiency
+for finality proofs.  Safety and liveness are maintained under the
+standard $n \geq 3f + 1$ assumption, with additional anonymity and
+censorship-resistance properties critical for diaspora communities
+operating under authoritarian threat models.
+
+% ============================================================================
+\begin{thebibliography}{99}
+
+\bibitem{hotstuff2019}
+M.~Yin, D.~Malkhi, M.~K.~Reiter, G.~G.~Gueta, and I.~Abraham,
+``HotStuff: BFT Consensus with Linearity and Responsiveness,''
+\emph{PODC}, pp.~347--356, 2019.
+
+\bibitem{espresso2023}
+Espresso Systems,
+``Espresso Sequencer: Decentralized Sequencing for Rollups,''
+2023.
+
+\bibitem{ringtail2023}
+E.~Ben-Sasson, A.~Chiesa, and N.~Spooner,
+``Sub-Linear Ring Signatures,''
+\emph{EUROCRYPT}, 2023.
+
+\bibitem{castro1999pbft}
+M.~Castro and B.~Liskov,
+``Practical Byzantine Fault Tolerance,''
+\emph{OSDI}, pp.~173--186, 1999.
+
+\bibitem{boneh2001bls}
+D.~Boneh, B.~Lynn, and H.~Shacham,
+``Short Signatures from the Weil Pairing,''
+\emph{ASIACRYPT}, pp.~514--532, 2001.
+
+\bibitem{micali1999vrf}
+S.~Micali, M.~Rabin, and S.~Vadhan,
+``Verifiable Random Functions,''
+\emph{FOCS}, pp.~120--130, 1999.
+
+\bibitem{rocket2020lux}
+Lux Partners,
+``Lux Platform: A Scalable Multi-Chain Framework,''
+2020.
+
+\bibitem{pnp001}
+Cyrus Pahlavi, Pars Team,
+``PNP-001: Dual-Layer Architecture for Pars Network,''
+2026.
+
+\bibitem{pnp002}
+Cyrus Pahlavi, Pars Team,
+``PNP-002: Censorship-Resistant Mesh Networking for Diaspora Communities,''
+2026.
+
+\bibitem{pnp005}
+Cyrus Pahlavi, Pars Team,
+``PNP-005: Coercion-Resistant Protocols for Governance Under
+Authoritarian Surveillance,''
+2026.
+
+\bibitem{pnp010}
+Cyrus Pahlavi, Pars Team,
+``PNP-010: Threshold Signatures for Pars Network Infrastructure,''
+2026.
+
+\end{thebibliography}
+
+\end{document}

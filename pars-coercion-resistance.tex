@@ -1,0 +1,821 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{shared/parscover}
+
+% ============================================================================
+% Coercion-Resistant Protocols for Governance Under Authoritarian Surveillance
+% Pars Network Technical Whitepaper PNP-005
+% ============================================================================
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{abstract}
+
+\geometry{margin=1in}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=green!50!black,
+    urlcolor=blue!60!black
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!10},
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!50!black}\itshape,
+    stringstyle=\color{red!60!black},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=5pt
+}
+
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc}
+
+\newtheorem{definition}{Definition}[section]
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{corollary}{Corollary}[section]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Cyrus Pahlavi, Pars Team}
+\fancyhead[R]{\small Coercion Resistance}
+\fancyfoot[C]{\thepage}
+
+% ============================================================================
+\title{%
+    \textbf{Coercion-Resistant Protocols for Governance\\
+    Under Authoritarian Surveillance}\\[0.5em]
+    \large Pars Network Technical Whitepaper PNP-005
+}
+
+\author{%
+    Cyrus Pahlavi, Pars Team\\
+    \texttt{research@pars.network}\\[0.5em]
+    \small Version 1.0 --- February 2026
+}
+
+\date{}
+
+% ============================================================================
+\begin{document}
+\parscoverpage
+
+\thispagestyle{fancy}
+
+% ============================================================================
+\begin{abstract}
+\noindent
+We present a suite of coercion-resistant protocols for the Pars Network,
+designed to protect diaspora community members who participate in
+decentralised governance under threat of physical coercion by authoritarian
+regimes.  Standard cryptographic protocols assume users freely control their
+keys; this assumption fails under detention, threat, or violence.  We
+introduce four mechanisms: (1)~deniable authentication producing transcripts
+indistinguishable from innocent interactions; (2)~panic passwords triggering
+credential rotation and evidence destruction while presenting a plausible
+decoy environment; (3)~decoy wallets with credible on-chain histories; and
+(4)~plausible deniability for governance votes through re-randomisable
+ballot encryption.  We formalise coercion resistance in the Universal
+Composability framework, prove receipt-freeness and coercion resistance
+under standard assumptions, and present a threat-scenario analysis based
+on documented practices of surveillance states.  The protocols integrate
+with the Pars session layer (PNP-003) and governance system (PNP-001).
+\end{abstract}
+
+\vspace{1em}
+\noindent\textbf{Keywords:} coercion resistance, deniable authentication,
+panic passwords, decoy wallets, plausible deniability, governance privacy
+
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Introduction}
+\label{sec:introduction}
+
+Participation in decentralised governance is a political act.  For the
+Persian diaspora, especially those with family inside Iran, governance
+participation carries material risk.  The Islamic Republic has a documented
+history of coercing individuals to reveal digital credentials, confiscating
+devices, and retaliating against diaspora
+activists' families~\cite{freedomhouse2023iran}.
+
+Standard cryptographic threat models assume private keys are under sole
+owner control.  This collapses under physical coercion.
+
+\subsection{Coercion Scenarios}
+
+\begin{enumerate}[label=\textbf{S\arabic*:}]
+    \item \textbf{Border Crossing:} Device inspected; user compelled to
+    unlock and demonstrate contents.
+    \item \textbf{Detention:} Interrogation demanding passwords, wallet
+    keys, communication histories.
+    \item \textbf{Family Pressure:} Threats against family members to
+    compel vote record disclosure.
+    \item \textbf{Warrant:} Cooperative jurisdiction compels provider to
+    reveal participation records.
+\end{enumerate}
+
+\subsection{Design Goals}
+
+\begin{enumerate}
+    \item \textbf{Coercion Resistance:} Coerced user complies without
+    revealing true governance participation or holdings.
+    \item \textbf{Receipt-Freeness:} No user can prove how they voted.
+    \item \textbf{Plausible Deniability:} Existence of true credentials
+    indistinguishable from non-existence.
+    \item \textbf{Minimal Overhead:} $<2\times$ overhead over normal
+    operations.
+\end{enumerate}
+
+\subsection{Contributions}
+
+\begin{itemize}
+    \item Formalisation of coercion resistance for blockchain governance.
+    \item Deniable authentication with offline deniability.
+    \item Panic password system with cryptographic decoy generation.
+    \item Decoy wallets with credible transaction histories.
+    \item Re-randomisable ballot encryption for receipt-free voting.
+    \item Threat-scenario analysis from documented state practices.
+\end{itemize}
+
+% ============================================================================
+\section{Threat Model}
+\label{sec:threat}
+
+\begin{definition}[Coercive Adversary]
+    $\mathcal{A}_{\mathrm{coerce}}$ has network adversary capabilities
+    and can additionally:
+    \begin{enumerate}[label=(\alph*)]
+        \item Compel secret disclosure
+        \item Compel any protocol action
+        \item Inspect device state
+        \item Observe physical behaviour during execution
+    \end{enumerate}
+\end{definition}
+
+\begin{definition}[Coercion Resistance]
+    Protocol $\Pi$ is coercion-resistant if strategy
+    $\sigma_{\mathrm{fake}}$ exists such that a coerced user following it
+    produces interaction indistinguishable from any $\sigma'$, from
+    $\mathcal{A}_{\mathrm{coerce}}$'s perspective.
+\end{definition}
+
+\begin{definition}[Receipt-Freeness]
+    A voting protocol is receipt-free if no voter can construct a receipt
+    proving their vote, even cooperating with the receipt requester.
+\end{definition}
+
+% ============================================================================
+\section{Deniable Authentication}
+\label{sec:deniable-auth}
+
+\subsection{Problem}
+
+Digital signatures produce non-repudiable transcripts.  If coerced to
+reveal authentication history, signatures prove specific interactions.
+
+\subsection{Ring-Signature-Based Authentication}
+
+\begin{algorithm}[H]
+\caption{Deniable Authentication}
+\label{alg:deniable-auth}
+\begin{algorithmic}[1]
+\Require Prover $A$ with $(a, A)$, Verifier $B$ with $(b, B)$
+\State $A$ generates ephemeral $(r, R = rG)$
+\State $\sigma \gets \mathrm{RingSign}(\{A, B\}, a, m)$
+\State $A \to B$: $(m, R, \sigma)$
+\State $B$ verifies: $\mathrm{RingVerify}(\{A, B\}, m, \sigma)$
+\State Third party cannot tell whether $A$ or $B$ signed
+\end{algorithmic}
+\end{algorithm}
+
+\begin{theorem}[Deniability]
+    Ring-signature authentication produces simulatable transcripts.
+    No third party can determine which ring member signed.
+\end{theorem}
+
+\begin{proof}
+    By ring signature anonymity~\cite{rivest2001leak}, $\sigma$ from $A$
+    is computationally indistinguishable from $\sigma$ from $B$.  Verifier
+    $B$ can produce valid ring signatures using their own key, simulating
+    any transcript.
+\end{proof}
+
+\subsection{PSP Integration}
+
+PSP (PNP-003) already provides pairwise deniability through X3DH's use
+of DH.  Ring-signature authentication extends this to explicit
+authentication contexts (governance proposals, identity assertions).
+
+% ============================================================================
+\section{Panic Passwords}
+\label{sec:panic}
+
+\subsection{Concept}
+
+\begin{definition}[Panic Password System]
+    \begin{itemize}
+        \item Primary password $p_1$: unlocks true environment
+        \item Panic password $p_2$: unlocks decoy, triggers protection
+        \item $\mathrm{KDF}(p_1) \neq \mathrm{KDF}(p_2)$; both produce
+        valid-looking keys
+    \end{itemize}
+\end{definition}
+
+\subsection{Dual-Key Derivation}
+
+\begin{algorithm}[H]
+\caption{Dual-Key Derivation}
+\label{alg:dual-key}
+\begin{algorithmic}[1]
+\Procedure{Setup}{$p_1$, $p_2$}
+    \State $k_1 \gets \mathrm{Argon2id}(p_1, s_1)$
+    \State $k_2 \gets \mathrm{Argon2id}(p_2, s_2)$
+    \State $E_1 \gets \mathrm{AES}(k_1, \mathrm{state}_{\mathrm{true}})$
+    \State $E_2 \gets \mathrm{AES}(k_2, \mathrm{state}_{\mathrm{decoy}})$
+    \State Store $(E_1, E_2, s_1, s_2)$
+\EndProcedure
+\Procedure{Unlock}{$p$}
+    \State Try $k \gets \mathrm{Argon2id}(p, s_1)$;
+        if $\mathrm{AES.Dec}(k, E_1)$ succeeds: return true env
+    \State Try $k \gets \mathrm{Argon2id}(p, s_2)$;
+        if $\mathrm{AES.Dec}(k, E_2)$ succeeds:
+        \Statex \quad TriggerPanic(); return decoy env
+    \State Return failure
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Panic Actions}
+
+\begin{enumerate}
+    \item \textbf{Key Rotation:} Rotate session keys and prekey bundles.
+    \item \textbf{Evidence Destruction:} Secure-erase primary state $E_1$.
+    \item \textbf{Silent Alert:} Dead-man notification via mesh to
+    designated contacts.
+    \item \textbf{Decoy Presentation:} Show plausible decoy environment.
+\end{enumerate}
+
+\begin{lstlisting}[language=Go,caption={Panic Action Handler}]
+type PanicHandler struct {
+    keys     *KeyManager
+    storage  *SecureStorage
+    mesh     *MeshClient
+    contacts []PeerID
+}
+
+func (h *PanicHandler) Execute(
+    ctx context.Context,
+) error {
+    // Rotate keys (best-effort)
+    h.keys.RotateAll(ctx)
+
+    // Destroy primary state
+    if err := h.storage.SecureErase(
+        "primary_state",
+    ); err != nil {
+        return fmt.Errorf("erase: %w", err)
+    }
+
+    // Silent alert via mesh
+    alert := &CoercionAlert{
+        Time: time.Now().Unix(),
+        Type: AlertPanic,
+    }
+    for _, c := range h.contacts {
+        h.mesh.SendAsync(ctx, c, alert)
+    }
+    return nil
+}
+\end{lstlisting}
+
+\begin{proposition}[Post-Panic Indistinguishability]
+    After panic activation, an inspector cannot determine whether a
+    primary state ever existed.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+    After secure erasure of $E_1$, only $(E_2, s_1, s_2)$ remains.
+    $s_1$ and zeroed $E_1$ space are indistinguishable from unused
+    storage.  The device appears to contain a single encrypted state
+    ($E_2$), unlockable with the panic password presented as
+    ``the only'' password.
+\end{proof}
+
+% ============================================================================
+\section{Decoy Wallets}
+\label{sec:decoy}
+
+\subsection{Requirements}
+
+\begin{enumerate}
+    \item \textbf{Credibility:} Plausible balance and history.
+    \item \textbf{Verifiability:} Real on-chain transactions.
+    \item \textbf{Consistency:} Matches claimed usage pattern.
+    \item \textbf{Independence:} No on-chain link to true wallet.
+\end{enumerate}
+
+\subsection{Construction}
+
+\begin{algorithm}[H]
+\caption{Decoy Wallet Construction}
+\label{alg:decoy-wallet}
+\begin{algorithmic}[1]
+\Procedure{CreateDecoy}{profile $P$}
+    \State $(d, D) \gets$ fresh key pair
+    \State Fund via stealth address from decoy fund
+    \For{$i = 1$ to $P.\mathrm{txCount}$}
+        \State Schedule tx at $t_{\mathrm{now}} - P.\mathrm{spacing} \cdot i$
+        \State Amount $\sim P.\mathrm{amountDist}$
+        \State Recipient $\in P.\mathrm{counterparties}$
+    \EndFor
+    \State Maintain $P.\mathrm{targetBalance}$
+    \State Store under panic key $k_2$
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\begin{lstlisting}[language=Go,caption={Decoy Profile}]
+type DecoyProfile struct {
+    MinBalance   *big.Int
+    MaxBalance   *big.Int
+    TxPerWeek    int
+    AmountMean   *big.Int
+    AmountStdDev *big.Int
+    Counterparties []common.Address
+    Tokens       []TokenHolding
+    VoteFreq     float64
+}
+
+var Standard = DecoyProfile{
+    MinBalance: eth(0.1),
+    MaxBalance: eth(2.0),
+    TxPerWeek:  3,
+    AmountMean: eth(0.05),
+    AmountStdDev: eth(0.03),
+    VoteFreq:   0.3,
+}
+\end{lstlisting}
+
+\subsection{Funding Unlinkability}
+
+\begin{enumerate}
+    \item Decoy funds from community-managed pool with ring-signature
+    deposits~\cite{noether2015ring}.
+    \item Transfers via stealth addresses (PNP-007).
+    \item Pool replenished via constant-rate treasury drip.
+\end{enumerate}
+
+% ============================================================================
+\section{Receipt-Free Governance Voting}
+\label{sec:voting}
+
+\subsection{Re-Randomisable Ballots}
+
+\begin{definition}[Re-Randomisable Ballot]
+    Ballot $B = (g^r,\; v \cdot h^r)$ under ElGamal with PK $h = g^x$
+    is re-randomised:
+    \[
+        B' = (g^{r+r'},\; v \cdot h^{r+r'})
+    \]
+    by any party knowing $h$, using fresh $r'$.
+\end{definition}
+
+\subsection{Voting Protocol}
+
+\begin{algorithm}[H]
+\caption{Coercion-Resistant Vote Casting}
+\label{alg:cr-vote}
+\begin{algorithmic}[1]
+\Require Voter $V$, vote $v$, election PK $h$
+\State \textbf{Registration (anonymous):}
+\State $V$ obtains credential $\mathrm{cred}$ via ZK eligibility proof
+\State $V$ also registers fake credential $\mathrm{cred}_{\mathrm{fake}}$
+\State
+\State \textbf{Casting:}
+\State $B \gets \mathrm{ElGamal.Enc}(h, v, r)$
+\State $\pi \gets \mathrm{Prove}(B \in \{\mathrm{Enc}(h,0), \mathrm{Enc}(h,1)\})$
+\State Submit $(B, \pi, \mathrm{cred})$ via anonymous channel
+\State
+\State \textbf{Re-randomisation (trustees):}
+\ForAll{trustee $T_j$}
+    \State $B \gets \mathrm{ReRand}(B, r'_j)$
+\EndFor
+\State After this, $V$ cannot link to final ballot
+\State
+\State \textbf{Under coercion:} cast with $\mathrm{cred}_{\mathrm{fake}}$
+\State Tally system silently ignores fake-credential votes
+\end{algorithmic}
+\end{algorithm}
+
+\begin{theorem}[Receipt-Freeness]
+    After trustee re-randomisation, no voter can construct a receipt
+    linking themselves to a re-randomised ballot.
+\end{theorem}
+
+\begin{proof}
+    Original ballot $B = (g^r, v \cdot h^r)$ becomes
+    $B' = (g^{r+r'}, v \cdot h^{r+r'})$ with $r' = \sum_j r'_j$ unknown
+    to the voter.  Even revealing original $r$, the voter cannot link $B$
+    to $B'$.  By ElGamal IND-CPA security, $B'$ is indistinguishable from
+    any ballot for the same vote value.
+\end{proof}
+
+\begin{theorem}[Coercion Resistance]
+    A coerced voter using the fake-credential strategy is
+    indistinguishable from honest voting.
+\end{theorem}
+
+\begin{proof}
+    $\mathrm{cred}_{\mathrm{fake}}$ is syntactically identical to
+    $\mathrm{cred}$ (both are ZK proofs).  The coercer cannot distinguish
+    them without credential issuer access.  The vote with
+    $\mathrm{cred}_{\mathrm{fake}}$ is encrypted identically.  The tally
+    system silently rejects it; the coercer cannot detect rejection.
+\end{proof}
+
+\subsection{Trustee Threshold}
+
+$t$-of-$n$ threshold with recommended $t = 5$, $n = 9$, trustees from
+distinct jurisdictions.
+
+\begin{definition}[Threshold Re-Randomisation]
+    Election PK $h = g^x$ with $x = \sum_{j=1}^n x_j \bmod q$ shared
+    among $n$ trustees.  Re-randomisation requires $\geq t$ contributors.
+\end{definition}
+
+% ============================================================================
+\section{Plausible Deniability for Governance}
+\label{sec:deniability}
+
+\subsection{Vote Deniability}
+
+\begin{enumerate}
+    \item \textbf{Credential Hiding:} Encrypted under primary key;
+    destroyed on panic.
+    \item \textbf{No On-Chain Identity:} Votes via session layer,
+    aggregated by trustees before L2 commitment.
+    \item \textbf{Time-Bounded Records:} Encryption keys rotated per
+    epoch; individual data deleted after tally.
+\end{enumerate}
+
+\begin{proposition}[Participation Deniability]
+    No adversary can determine with non-negligible advantage whether a
+    specific user participated.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+    Ballots submitted via anonymous routing, re-randomised by trustees.
+    No on-chain voter-ballot mapping.  Device after panic contains no
+    credential evidence.
+\end{proof}
+
+% ============================================================================
+\section{Dead Man's Switch}
+\label{sec:dead-man}
+
+\begin{algorithm}[H]
+\caption{Dead Man's Switch}
+\label{alg:dead-man}
+\begin{algorithmic}[1]
+\Procedure{Setup}{user $U$, interval $T$, contacts $C$}
+    \State Register heartbeat schedule with interval $T$
+    \State Pre-encrypt alert messages for each $c \in C$
+    \State Distribute time-locked capsules to relay network
+\EndProcedure
+\Procedure{Heartbeat}{}
+    \State Authenticated heartbeat to relay; reset timer
+\EndProcedure
+\Procedure{Trigger}{}
+    \State Timer expires without heartbeat
+    \State Decrypt and deliver alerts; rotate $U$'s keys;
+    publish DID revocation
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\begin{definition}[Time-Lock Capsule]
+    $C = (N, a, t, Z)$ where $N = pq$, $Z = m \oplus H(a^{2^t} \bmod N)$.
+    Openable in $O(t)$ sequential squarings; not
+    parallelisable~\cite{rivest1996time}.
+\end{definition}
+
+% ============================================================================
+\section{Threat Scenario Analysis}
+\label{sec:analysis}
+
+\begin{table}[h]
+\centering
+\caption{Mitigation Matrix}
+\label{tab:mitigation}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Scenario} & \textbf{Threat} & \textbf{Mitigation} \\
+\midrule
+S1: Border    & Device inspection    & Decoy wallet + panic pw \\
+S1: Border    & Password demand      & Panic pw as primary \\
+S2: Detention & Extended interrogation & Panic destroys evidence \\
+S2: Detention & Key disclosure       & Decoy keys presented \\
+S2: Detention & Missed check-in      & Dead man's switch \\
+S3: Family    & Vote disclosure      & Receipt-free voting \\
+S3: Family    & Coerced voting       & Fake credentials \\
+S4: Warrant   & Server data request  & No plaintext server-side \\
+S4: Warrant   & Blockchain analysis  & Stealth addresses \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================================
+\section{Implementation}
+\label{sec:implementation}
+
+\subsection{Secure Erasure}
+
+\begin{lstlisting}[language=Go,caption={Secure Erasure}]
+func (s *SecureStorage) Erase(
+    key string,
+) error {
+    path := filepath.Join(s.path, key)
+    info, err := os.Stat(path)
+    if err != nil {
+        return fmt.Errorf("stat: %w", err)
+    }
+    size := info.Size()
+    f, err := os.OpenFile(
+        path, os.O_WRONLY, 0,
+    )
+    if err != nil {
+        return fmt.Errorf("open: %w", err)
+    }
+    defer f.Close()
+
+    buf := make([]byte, 4096)
+    for pass := 0; pass < 3; pass++ {
+        f.Seek(0, 0)
+        rem := size
+        for rem > 0 {
+            n := min(int64(len(buf)), rem)
+            rand.Read(buf[:n])
+            f.Write(buf[:n])
+            rem -= n
+        }
+        f.Sync()
+    }
+    f.Close()
+    return os.Remove(path)
+}
+\end{lstlisting}
+
+\subsection{App Disguise}
+
+\begin{enumerate}
+    \item Icon and name changeable to common utility (calculator, weather).
+    \item Disguise activated via specific gesture.
+    \item Functional utility interface; Pars UI behind secondary gesture.
+\end{enumerate}
+
+% ============================================================================
+\section{Formal Security Analysis}
+\label{sec:formal}
+
+\begin{definition}[$\mathcal{F}_{\mathrm{CR}}$]
+    Ideal functionality accepting votes from registered voters.  On
+    coercion: accepts ``coerced vote'' without counting it, reveals same
+    view as honest vote to coercer, tallies only non-coerced votes.
+\end{definition}
+
+\begin{theorem}[UC Realisation]
+    The Pars coercion-resistant voting protocol UC-realises
+    $\mathcal{F}_{\mathrm{CR}}$ under DDH, assuming $< t$ corrupted
+    trustees.
+\end{theorem}
+
+The proof follows Juels et al.~\cite{juels2005coercion}, extended with
+anonymous credential and session-layer integration.
+
+% ============================================================================
+\section{Limitations}
+\label{sec:limitations}
+
+\begin{enumerate}
+    \item No protocol defeats sustained physical torture; operational
+    security (ephemeral devices) is necessary for high-risk situations.
+    \item Decoy credibility requires regular profile updates.
+    \item If adversary knows panic system exists, they may demand both
+    passwords.
+    \item $\geq t$ colluding trustees can de-anonymise votes.
+\end{enumerate}
+
+% ============================================================================
+\section{Related Work}
+\label{sec:related}
+
+Juels et al.~\cite{juels2005coercion} introduced coercion-resistant
+e-voting.  Civitas~\cite{clarkson2008civitas} implemented the scheme.
+Chaum~\cite{chaum2004receipt} provides receipt-free verification.
+TrueCrypt/VeraCrypt~\cite{truecrypt2004,veracrypt2015} pioneered
+plausible-deniability disk encryption.  Briar~\cite{briar2017} has a
+panic button.  Pars integrates coercion resistance into a blockchain
+governance platform with diaspora-specific threat modelling.
+
+% ============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+The Pars coercion-resistant suite addresses physical security threats
+facing diaspora members.  Deniable authentication, panic passwords, decoy
+wallets, and receipt-free voting provide layered defence.  Formal analysis
+in the UC framework proves coercion resistance and receipt-freeness under
+standard assumptions.
+
+Cryptographic security alone is insufficient when adversaries operate
+outside standard threat model assumptions.  Explicitly modelling coercion
+as a protocol-level threat enables meaningful protection even when physical
+safety is compromised.
+
+% ============================================================================
+\bibliographystyle{plain}
+\begin{thebibliography}{26}
+
+\bibitem{freedomhouse2023iran}
+Freedom House,
+``Freedom on the Net: Iran,''
+2023.
+
+\bibitem{rivest2001leak}
+R.~Rivest, A.~Shamir, and Y.~Tauman,
+``How to Leak a Secret,''
+\emph{ASIACRYPT 2001}, pp.~552--565, 2001.
+
+\bibitem{unger2015dake}
+N.~Unger and I.~Goldberg,
+``Deniable Key Exchanges for Secure Messaging,''
+\emph{CCS}, pp.~1211--1223, 2015.
+
+\bibitem{juels2005coercion}
+A.~Juels, D.~Catalano, and M.~Jakobsson,
+``Coercion-Resistant Electronic Elections,''
+\emph{WPES}, pp.~61--70, 2005.
+
+\bibitem{clarkson2008civitas}
+M.~Clarkson, S.~Chong, and A.~Myers,
+``Civitas: Toward a Secure Voting System,''
+\emph{IEEE S\&P}, pp.~354--368, 2008.
+
+\bibitem{chaum2004receipt}
+D.~Chaum,
+``Secret-ballot receipts,''
+\emph{IEEE Security \& Privacy}, 2(1), 2004.
+
+\bibitem{truecrypt2004}
+TrueCrypt Foundation,
+``TrueCrypt: Hidden Volumes,''
+2004.
+
+\bibitem{veracrypt2015}
+IDRIX,
+``VeraCrypt: Plausible Deniability,''
+2015.
+
+\bibitem{briar2017}
+Briar Project,
+``Briar: Secure messaging, anywhere,''
+2017.
+
+\bibitem{noether2015ring}
+S.~Noether,
+``Ring Signature Confidential Transactions for Monero,''
+\emph{MRL-0005}, 2015.
+
+\bibitem{rivest1996time}
+R.~Rivest, A.~Shamir, and D.~Wagner,
+``Time-lock puzzles and timed-release crypto,''
+\emph{MIT/LCS/TR-684}, 1996.
+
+\bibitem{canetti2001universally}
+R.~Canetti,
+``Universally Composable Security,''
+\emph{FOCS}, pp.~136--145, 2001.
+
+\bibitem{goldwasser1989knowledge}
+S.~Goldwasser, S.~Micali, and C.~Rackoff,
+``The Knowledge Complexity of Interactive Proof Systems,''
+\emph{SIAM J.\ Comput.}, 18(1), 1989.
+
+\bibitem{chaum1981untraceable}
+D.~Chaum,
+``Untraceable electronic mail,''
+\emph{Commun.\ ACM}, 24(2), 1981.
+
+\bibitem{pedersen1991threshold}
+T.~Pedersen,
+``A Threshold Cryptosystem without a Trusted Party,''
+\emph{EUROCRYPT '91}, pp.~522--526, 1991.
+
+\bibitem{elgamal1985public}
+T.~ElGamal,
+``A Public Key Cryptosystem Based on Discrete Logarithms,''
+\emph{IEEE Trans.\ Inf.\ Theory}, 31(4), 1985.
+
+\bibitem{boneh2004short}
+D.~Boneh, X.~Boyen, and H.~Shacham,
+``Short Group Signatures,''
+\emph{CRYPTO 2004}, pp.~41--55, 2004.
+
+\bibitem{groth2016size}
+J.~Groth,
+``On the Size of Pairing-Based Non-interactive Arguments,''
+\emph{EUROCRYPT 2016}, pp.~305--326, 2016.
+
+\bibitem{diffie1976new}
+W.~Diffie and M.~Hellman,
+``New directions in cryptography,''
+\emph{IEEE Trans.\ Inf.\ Theory}, 22(6), 1976.
+
+\bibitem{marlinspike2016signal}
+M.~Marlinspike and T.~Perrin,
+``The Signal Protocol,''
+2016.
+
+\bibitem{danezis2009sphinx}
+G.~Danezis and I.~Goldberg,
+``Sphinx,''
+\emph{IEEE S\&P}, 2009.
+
+\bibitem{bernstein2006curve25519}
+D.\,J.~Bernstein,
+``Curve25519,''
+\emph{PKC 2006}, 2006.
+
+\bibitem{adida2008helios}
+B.~Adida,
+``Helios: Web-based Open-Audit Voting,''
+\emph{USENIX Security}, pp.~335--348, 2008.
+
+\bibitem{benaloh2006simple}
+J.~Benaloh,
+``Simple Verifiable Elections,''
+\emph{EVT}, 2006.
+
+\bibitem{amnesty2022iran}
+Amnesty International,
+``Iran: Digital Surveillance,''
+2022.
+
+\bibitem{reporters2023iran}
+Reporters Without Borders,
+``Iran: Digital Security for Journalists,''
+2023.
+
+\end{thebibliography}
+
+\appendix
+
+\section{Decoy Profiles}
+\label{app:profiles}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{Profile} & \textbf{Balance} & \textbf{Tx/Wk} & \textbf{Tokens} \\
+\midrule
+Minimal  & 0.01--0.1 PARS & 1 & 0 \\
+Standard & 0.1--2.0 PARS  & 3 & 2 \\
+Active   & 1.0--10.0 PARS & 7 & 5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Panic Sequence}
+\label{app:sequence}
+
+\begin{enumerate}
+    \item Enter panic password
+    \item Derive decoy key
+    \item Background: rotate keys (100\,ms)
+    \item Background: erase primary state (200\,ms)
+    \item Background: mesh alerts (async)
+    \item Foreground: present decoy ($<$50\,ms)
+    \item Total visible delay: $<$300\,ms
+\end{enumerate}
+
+\end{document}

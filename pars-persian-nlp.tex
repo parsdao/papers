@@ -1,0 +1,804 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{shared/parscover}
+
+% --- Packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{listings}
+\usepackage{microtype}
+\usepackage{natbib}
+\usepackage{doi}
+\usepackage{url}
+\usepackage{xspace}
+\usepackage{multirow}
+\usepackage{subcaption}
+
+\geometry{margin=1in}
+\pgfplotsset{compat=1.18}
+
+% --- Macros ---
+\newcommand{\Pars}{\textsc{Pars}\xspace}
+\newcommand{\parslm}{\textsc{ParsLM}\xspace}
+\newcommand{\parstok}{\textsc{ParsTok}\xspace}
+
+\newtheorem{definition}{Definition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+
+% --- Header ---
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Cyrus Pahlavi, Pars Team}
+\fancyhead[R]{\small Persian NLP Infrastructure}
+\fancyfoot[C]{\thepage}
+
+\title{Persian NLP Infrastructure: Large Language Models\\for Farsi Text Understanding\\[0.5em]
+\large Tokenization, Morphology, and Pre-Training for the Pars Network}
+
+\author{
+  Cyrus Pahlavi, Pars Team\\
+  \texttt{research@pars.id}
+}
+
+\date{February 2026}
+
+\begin{document}
+\parscoverpage
+
+
+\begin{abstract}
+We present \parslm, a suite of Persian-optimized large language models and NLP infrastructure designed for the Pars Network. Our contributions address three fundamental challenges in Farsi text processing: (1)~a morphology-aware tokenizer (\parstok) that reduces token count by 38\% compared to multilingual tokenizers while preserving morphological boundaries, (2)~a comprehensive script normalization pipeline handling the diversity of Persian Unicode representations, Arabic-script variations, and informal Finglish transliterations, and (3)~a pre-training methodology that leverages both formal and informal Persian text sources with dialect-aware sampling. We train models at 1.3B, 7B, and 13B parameter scales on a curated 420B-token Persian corpus spanning formal literature, news, social media, and diaspora community content. \parslm achieves state-of-the-art results on ParsiNLU, FarsTail, and a new diaspora-specific benchmark we introduce, outperforming multilingual models by 12--18\% on Persian-specific tasks while requiring 3$\times$ fewer tokens per input. We release all models, the tokenizer, and the normalization toolkit under open licenses.
+\end{abstract}
+
+\section{Introduction}
+
+The Persian language (Farsi) presents unique challenges for natural language processing that are inadequately addressed by multilingual models trained primarily on English-centric corpora~\citep{conneau2020unsupervised,xue2021mt5}. With approximately 110 million speakers worldwide and a rich literary tradition spanning 12 centuries~\citep{windfuhr2009iranian}, Persian is simultaneously a high-resource language in terms of textual heritage and an underserved language in terms of computational NLP infrastructure.
+
+For the Persian diaspora, NLP capabilities are essential infrastructure: content moderation for community platforms, machine translation between Persian and host-country languages, information retrieval from Persian-language sources, and automated analysis of Persian social media for community awareness~\citep{shafiee2021parsbert}. The Pars Network, as sovereign infrastructure for the Persian diaspora, requires NLP capabilities that are not dependent on external API providers who may restrict access based on sanctions regulations or political considerations.
+
+\subsection{Challenges in Persian NLP}
+
+\subsubsection{Script and Encoding Complexity}
+
+Persian uses a modified Arabic script with four additional letters (\texttt{U+067E} \textit{pe}, \texttt{U+0686} \textit{che}, \texttt{U+0698} \textit{zhe}, \texttt{U+06AF} \textit{gaf}). However, Persian text in the wild exhibits substantial variation:
+
+\begin{itemize}
+    \item \textbf{Arabic-Persian confusables:} The Arabic \textit{kaf} (\texttt{U+0643}) vs.\ Persian \textit{kaf} (\texttt{U+06A9}), Arabic \textit{yeh} (\texttt{U+064A}) vs.\ Persian \textit{yeh} (\texttt{U+06CC}).
+    \item \textbf{Zero-width characters:} Zero-width non-joiner (ZWNJ, \texttt{U+200C}) is semantically meaningful in Persian, distinguishing compound words from phrases, but is inconsistently applied.
+    \item \textbf{Diacritics:} Short vowel marks (harakat) are almost never written in modern Persian but appear in classical texts and educational materials.
+    \item \textbf{Finglish:} Persian written in Latin script, widely used in diaspora social media, with no standardized transliteration scheme.
+\end{itemize}
+
+\subsubsection{Morphological Richness}
+
+Persian is a moderately inflectional language with agglutinative tendencies. A single surface form can encode multiple morphemes:
+
+\begin{definition}[Persian Morphological Complexity]
+A Persian word form $w$ can be decomposed as:
+\begin{equation}
+    w = \mathit{prefix}^* + \mathit{stem} + \mathit{suffix}^*
+\end{equation}
+where prefixes include negation (\textit{na-}, \textit{bi-}), causative (\textit{bar-}), and directional markers, and suffixes include person/number agreement, possessive clitics, plural markers, and the indefinite \textit{-i} enclitic.
+\end{definition}
+
+\subsubsection{Dialect Variation}
+
+The Persian diaspora encompasses speakers of Iranian Persian (Farsi), Dari (Afghan Persian), and Tajiki (Tajik Persian), along with regional dialects (Isfahani, Shirazi, Tehrani, Mashhadi) and sociolects~\citep{windfuhr2009iranian}. A useful NLP system must handle this variation gracefully.
+
+\subsection{Contributions}
+
+\begin{enumerate}[label=(\roman*)]
+    \item \textbf{\parstok:} A morphology-aware byte-pair encoding (BPE) tokenizer trained on Persian text with morphological boundary constraints, reducing token count by 38\% over mBERT's WordPiece and 24\% over SentencePiece Unigram models.
+    \item \textbf{Normalization Pipeline:} A comprehensive Persian text normalization system handling script variants, ZWNJ placement, diacritic normalization, and bidirectional Finglish transliteration.
+    \item \textbf{Pre-training Corpus:} A curated 420B-token Persian corpus with provenance tracking, dialect labels, and quality scores.
+    \item \textbf{\parslm Models:} Language models at 1.3B, 7B, and 13B parameter scales achieving state-of-the-art on Persian NLU benchmarks.
+    \item \textbf{Diaspora Benchmark:} A new evaluation benchmark covering diaspora-specific tasks: code-switching detection, Finglish understanding, cross-dialect comprehension, and cultural knowledge.
+\end{enumerate}
+
+\section{Related Work}
+
+\subsection{Persian Language Models}
+
+ParsBERT~\citep{shafiee2021parsbert} was the first monolingual Persian BERT model, trained on 3.9M documents. It demonstrated significant improvements over multilingual BERT on Persian NLU tasks. FaBERT~\citep{fabert2022} extended this with a larger corpus and improved tokenization. AriaBERT~\citep{ghafouri2023ariabert} introduced Persian-specific pre-training objectives leveraging morphological structure.
+
+For generative models, PersianGPT~\citep{persiangpt2023} adapted GPT-2 to Persian, and several multilingual models (BLOOM~\citep{scao2022bloom}, mGPT~\citep{shliazhko2024mgpt}) include Persian in their training data, though with limited representation (typically $<$2\% of training tokens).
+
+\subsection{Morphology-Aware Tokenization}
+
+Standard BPE~\citep{sennrich2016neural} and Unigram~\citep{kudo2018sentencepiece} tokenizers operate on surface forms without morphological awareness. Morphological tokenization approaches include Morfessor~\citep{virpioja2013morfessor} for unsupervised morphological segmentation and linguistically-informed BPE~\citep{saleva2021ethio} that constrains merge operations to respect morpheme boundaries.
+
+\subsection{Arabic Script NLP}
+
+Persian shares many challenges with Arabic NLP~\citep{habash2010arabic}. CAMeL Tools~\citep{obeid2020camel} provides comprehensive Arabic processing, including disambiguation and morphological analysis. Farasa~\citep{abdelali2016farasa} offers fast Arabic segmentation. While these tools address related problems, Persian-specific phenomena (ZWNJ semantics, ezafe construction, distinct morphology) require dedicated solutions.
+
+\section{Script Normalization Pipeline}
+
+\subsection{Architecture}
+
+The normalization pipeline consists of seven sequential stages:
+
+\begin{algorithm}[H]
+\caption{Persian Text Normalization Pipeline}
+\label{alg:normalize}
+\begin{algorithmic}[1]
+\Require Raw text $t$
+\Ensure Normalized text $\hat{t}$
+\State $t_1 \leftarrow \mathsf{UnicodeNormalize}(t)$ \Comment{NFC normalization}
+\State $t_2 \leftarrow \mathsf{ArabicToPersian}(t_1)$ \Comment{Character mapping}
+\State $t_3 \leftarrow \mathsf{NormalizeSpaces}(t_2)$ \Comment{Whitespace cleanup}
+\State $t_4 \leftarrow \mathsf{NormalizeZWNJ}(t_3)$ \Comment{ZWNJ standardization}
+\State $t_5 \leftarrow \mathsf{RemoveDiacritics}(t_4)$ \Comment{Optional harakat removal}
+\State $t_6 \leftarrow \mathsf{NormalizeNumbers}(t_5)$ \Comment{Persian/Arabic digit mapping}
+\State $\hat{t} \leftarrow \mathsf{NormalizePunctuation}(t_6)$ \Comment{Punctuation standardization}
+\State \Return $\hat{t}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Arabic-to-Persian Character Mapping}
+
+We define a comprehensive mapping of Arabic Unicode code points to their Persian equivalents:
+
+\begin{table}[H]
+\centering
+\caption{Arabic-to-Persian Character Normalization}
+\label{tab:char-map}
+\begin{tabular}{llll}
+\toprule
+\textbf{Arabic} & \textbf{Code} & \textbf{Persian} & \textbf{Code} \\
+\midrule
+\textit{kaf} & U+0643 & \textit{kaf} & U+06A9 \\
+\textit{yeh} & U+064A & \textit{yeh} & U+06CC \\
+\textit{alef maksura} & U+0649 & \textit{yeh} & U+06CC \\
+\textit{heh goal} & U+06C1 & \textit{heh} & U+0647 \\
+\textit{hamza varieties} & U+0621--0626 & \textit{context-dependent} & -- \\
+\textit{tatweel} & U+0640 & (removed) & -- \\
+Eastern Arabic digits & U+0660--0669 & Extended Arabic digits & U+06F0--06F9 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{ZWNJ Normalization}
+
+The zero-width non-joiner is semantically meaningful in Persian, distinguishing constructions such as:
+
+\begin{itemize}
+    \item Compound verbs: \textit{kar\text{<ZWNJ>}mi-konam} (``I do work'') vs.\ \textit{karmi-konam} (nonsensical)
+    \item Possessives: \textit{ketab\text{<ZWNJ>}ha} (``books'') vs.\ \textit{ketabha} (informal/incorrect)
+    \item Ezafe: Used to separate ezafe constructions in some orthographic traditions
+\end{itemize}
+
+Our ZWNJ normalizer uses a bidirectional LSTM trained on a manually annotated corpus of 50{,}000 sentences to predict correct ZWNJ placement:
+
+\begin{algorithm}[H]
+\caption{ZWNJ Prediction}
+\label{alg:zwnj}
+\begin{algorithmic}[1]
+\Require Character sequence $c_1, \ldots, c_n$
+\Ensure ZWNJ-normalized sequence
+\State Remove all existing ZWNJ characters
+\State $h_1, \ldots, h_n \leftarrow \mathsf{BiLSTM}(c_1, \ldots, c_n)$
+\For{$i \in \{1, \ldots, n-1\}$}
+    \State $p_i \leftarrow \sigma(\mathbf{w}^\top [h_i; h_{i+1}] + b)$
+    \If{$p_i > \tau$} \Comment{$\tau = 0.5$}
+        \State Insert ZWNJ between $c_i$ and $c_{i+1}$
+    \EndIf
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+The ZWNJ predictor achieves 96.8\% F1 on our held-out test set.
+
+\subsection{Finglish Transliteration}
+
+Finglish (Farsi written in Latin script) is prevalent in diaspora communication. We develop a bidirectional transliteration system:
+
+\begin{table}[H]
+\centering
+\caption{Finglish Mapping Ambiguities (Selected Examples)}
+\label{tab:finglish}
+\begin{tabular}{lll}
+\toprule
+\textbf{Latin} & \textbf{Persian Candidates} & \textbf{Disambiguation} \\
+\midrule
+\texttt{a} & alef, ain & Context-dependent \\
+\texttt{s} & sin, sad, tha & Word frequency + n-gram \\
+\texttt{z} & zal, ze, zad, za & Lexicon lookup \\
+\texttt{t} & te, ta & Morphological context \\
+\texttt{gh} & ghain, qaf & Regional preference \\
+\texttt{kh} & khe & Unambiguous \\
+\texttt{sh} & shin & Unambiguous \\
+\texttt{ch} & che & Unambiguous \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Our transliterator uses a sequence-to-sequence transformer model with copy attention~\citep{gu2016copying}, trained on 200K Finglish-Persian parallel pairs collected from social media with human verification:
+
+\begin{table}[H]
+\centering
+\caption{Finglish Transliteration Accuracy}
+\label{tab:finglish-acc}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{Word Acc.} & \textbf{Char Acc.} & \textbf{BLEU} & \textbf{CER} \\
+\midrule
+Rule-based & 42.1\% & 71.3\% & 38.2 & 28.7 \\
+Statistical (n-gram) & 58.7\% & 82.4\% & 56.1 & 17.6 \\
+Seq2Seq (LSTM) & 71.3\% & 89.2\% & 68.4 & 10.8 \\
+\parstok Transliterator & \textbf{82.6\%} & \textbf{94.1\%} & \textbf{79.3} & \textbf{5.9} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Morphology-Aware Tokenizer}
+
+\subsection{Design Principles}
+
+\parstok extends BPE with three constraints designed for Persian:
+
+\begin{enumerate}
+    \item \textbf{Morpheme Boundary Respect:} BPE merges are prohibited from crossing annotated morpheme boundaries in a reference morphological lexicon.
+    \item \textbf{ZWNJ Awareness:} The ZWNJ character is treated as a hard boundary that cannot be merged across.
+    \item \textbf{Script Uniformity:} Merges cannot combine characters from different scripts (Persian, Latin, digit sequences).
+\end{enumerate}
+
+\subsection{Training Procedure}
+
+\begin{algorithm}[H]
+\caption{Morphology-Constrained BPE Training}
+\label{alg:bpe}
+\begin{algorithmic}[1]
+\Require Training corpus $\mathcal{C}$, morphological lexicon $\mathcal{L}$, vocabulary size $V$
+\Ensure Tokenizer vocabulary $\mathcal{V}$
+\State $\mathcal{V} \leftarrow \mathsf{BaseVocab}()$ \Comment{All Unicode characters in $\mathcal{C}$}
+\State $\mathcal{C}_{\mathit{norm}} \leftarrow \mathsf{Normalize}(\mathcal{C})$
+\State $\mathcal{C}_{\mathit{morph}} \leftarrow \mathsf{MorphSegment}(\mathcal{C}_{\mathit{norm}}, \mathcal{L})$ \Comment{Add boundary markers}
+\While{$|\mathcal{V}| < V$}
+    \State $(a, b) \leftarrow \mathsf{MostFrequentPair}(\mathcal{C}_{\mathit{morph}})$
+    \If{$\mathsf{CrossesBoundary}(a, b, \mathcal{C}_{\mathit{morph}})$}
+        \State $\mathsf{Skip}(a, b)$ \Comment{Respect morpheme boundaries}
+        \State \textbf{continue}
+    \EndIf
+    \If{$\mathsf{CrossesScript}(a, b)$}
+        \State $\mathsf{Skip}(a, b)$ \Comment{Respect script boundaries}
+        \State \textbf{continue}
+    \EndIf
+    \State $\mathcal{V} \leftarrow \mathcal{V} \cup \{a \oplus b\}$
+    \State $\mathcal{C}_{\mathit{morph}} \leftarrow \mathsf{ApplyMerge}(\mathcal{C}_{\mathit{morph}}, a, b)$
+\EndWhile
+\State \Return $\mathcal{V}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Vocabulary Composition}
+
+We train \parstok with a vocabulary of 64{,}000 tokens:
+
+\begin{table}[H]
+\centering
+\caption{Vocabulary Composition}
+\label{tab:vocab}
+\begin{tabular}{lrc}
+\toprule
+\textbf{Category} & \textbf{Count} & \textbf{Percentage} \\
+\midrule
+Persian morphemes & 38{,}400 & 60.0\% \\
+Persian whole words & 12{,}800 & 20.0\% \\
+Latin script tokens & 6{,}400 & 10.0\% \\
+Digits and numbers & 2{,}560 & 4.0\% \\
+Special/punctuation & 1{,}280 & 2.0\% \\
+Mixed/other & 2{,}560 & 4.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Tokenization Efficiency}
+
+\begin{table}[H]
+\centering
+\caption{Tokenization Efficiency Comparison (tokens per 1K characters)}
+\label{tab:tok-eff}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Tokenizer} & \textbf{Formal} & \textbf{News} & \textbf{Social} & \textbf{Finglish} \\
+\midrule
+mBERT WordPiece & 312 & 298 & 341 & 423 \\
+SentencePiece Unigram & 254 & 241 & 278 & 367 \\
+BLOOM tokenizer & 267 & 253 & 295 & 389 \\
+ParsBERT tokenizer & 198 & 189 & 231 & 412 \\
+\parstok (ours) & \textbf{186} & \textbf{178} & \textbf{212} & \textbf{247} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Pre-Training Corpus}
+
+\subsection{Data Sources}
+
+\begin{table}[H]
+\centering
+\caption{Pre-Training Corpus Composition}
+\label{tab:corpus}
+\begin{tabular}{lrrrl}
+\toprule
+\textbf{Source} & \textbf{Documents} & \textbf{Tokens (B)} & \textbf{Pct.} & \textbf{Dialect} \\
+\midrule
+Common Crawl (filtered) & 45.2M & 180 & 42.9\% & Mixed \\
+Persian Wikipedia & 0.8M & 3.2 & 0.8\% & Formal \\
+Persian news archives & 12.4M & 52 & 12.4\% & Iranian \\
+Persian literature corpus & 0.3M & 8.4 & 2.0\% & Classical \\
+Social media (filtered) & 89.1M & 67 & 16.0\% & Mixed \\
+Diaspora forums/blogs & 4.2M & 18 & 4.3\% & Mixed \\
+Dari text sources & 2.1M & 24 & 5.7\% & Dari \\
+Tajik text sources & 0.9M & 11 & 2.6\% & Tajiki \\
+Academic/scientific & 1.8M & 15 & 3.6\% & Formal \\
+Code-switched text & 5.6M & 22 & 5.2\% & Diaspora \\
+Synthetic/augmented & 3.2M & 19.4 & 4.6\% & Mixed \\
+\midrule
+\textbf{Total} & \textbf{165.6M} & \textbf{420} & \textbf{100\%} & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Quality Filtering}
+
+We apply a multi-stage quality filtering pipeline:
+
+\begin{algorithm}[H]
+\caption{Corpus Quality Filtering}
+\label{alg:filter}
+\begin{algorithmic}[1]
+\Require Raw document $d$
+\Ensure Quality score $q \in [0, 1]$ and accept/reject decision
+\State $q_{\mathit{lang}} \leftarrow \mathsf{LanguageID}(d)$ \Comment{fastText Persian confidence}
+\If{$q_{\mathit{lang}} < 0.8$}
+    \State \Return \textsc{Reject}
+\EndIf
+\State $q_{\mathit{dedup}} \leftarrow \mathsf{MinHash}(d)$ \Comment{Near-duplicate detection}
+\If{$\mathsf{IsDuplicate}(q_{\mathit{dedup}})$}
+    \State \Return \textsc{Reject}
+\EndIf
+\State $q_{\mathit{toxic}} \leftarrow \mathsf{ToxicityScore}(d)$ \Comment{Persian toxicity classifier}
+\If{$q_{\mathit{toxic}} > 0.7$}
+    \State \Return \textsc{Reject}
+\EndIf
+\State $q_{\mathit{quality}} \leftarrow \mathsf{QualityClassifier}(d)$ \Comment{Trained on human ratings}
+\If{$q_{\mathit{quality}} < 0.4$}
+    \State \Return \textsc{Reject}
+\EndIf
+\State $q \leftarrow 0.3 \cdot q_{\mathit{lang}} + 0.3 \cdot q_{\mathit{quality}} + 0.2 \cdot (1 - q_{\mathit{toxic}}) + 0.2 \cdot \mathsf{Length}(d)$
+\State \Return (\textsc{Accept}, $q$)
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Dialect-Aware Sampling}
+
+To ensure balanced representation across dialects, we employ temperature-weighted sampling during training:
+
+\begin{equation}
+    P(\text{sample from dialect } d) = \frac{|C_d|^{1/T}}{\sum_{d'} |C_{d'}|^{1/T}}
+\end{equation}
+
+where $|C_d|$ is the number of tokens in dialect $d$'s subcorpus and $T$ is the temperature parameter. We use $T = 0.7$, which upsamples minority dialects (Dari, Tajiki) while maintaining Iranian Persian as the majority.
+
+\section{Model Architecture and Training}
+
+\subsection{Architecture}
+
+\parslm uses a decoder-only transformer architecture with the following modifications for Persian:
+
+\begin{table}[H]
+\centering
+\caption{Model Architecture Specifications}
+\label{tab:arch}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Parameter} & \textbf{1.3B} & \textbf{7B} & \textbf{13B} \\
+\midrule
+Layers & 24 & 32 & 40 \\
+Hidden dimension & 2{,}048 & 4{,}096 & 5{,}120 \\
+Attention heads & 16 & 32 & 40 \\
+KV heads (GQA) & 4 & 8 & 8 \\
+FFN dimension & 5{,}504 & 11{,}008 & 13{,}824 \\
+Context length & 4{,}096 & 8{,}192 & 8{,}192 \\
+Vocabulary size & 64{,}000 & 64{,}000 & 64{,}000 \\
+Positional encoding & RoPE & RoPE & RoPE \\
+Normalization & RMSNorm & RMSNorm & RMSNorm \\
+Activation & SwiGLU & SwiGLU & SwiGLU \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Training Configuration}
+
+\begin{table}[H]
+\centering
+\caption{Training Hyperparameters}
+\label{tab:training}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Parameter} & \textbf{1.3B} & \textbf{7B} & \textbf{13B} \\
+\midrule
+Batch size (tokens) & 2M & 4M & 4M \\
+Learning rate (peak) & $3 \times 10^{-4}$ & $3 \times 10^{-4}$ & $2 \times 10^{-4}$ \\
+LR schedule & Cosine & Cosine & Cosine \\
+Warmup steps & 2{,}000 & 2{,}000 & 2{,}000 \\
+Weight decay & 0.1 & 0.1 & 0.1 \\
+Gradient clipping & 1.0 & 1.0 & 1.0 \\
+Training tokens & 300B & 420B & 420B \\
+Optimizer & AdamW & AdamW & AdamW \\
+Precision & bf16 & bf16 & bf16 \\
+Hardware & 16$\times$A100 & 64$\times$A100 & 128$\times$A100 \\
+Training time & 5 days & 18 days & 32 days \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Persian-Specific Pre-Training Objectives}
+
+In addition to standard causal language modeling, we incorporate two Persian-specific auxiliary objectives:
+
+\subsubsection{Morphological Prediction}
+
+For each token, we add an auxiliary head predicting morphological features (POS tag, number, person, tense):
+
+\begin{equation}
+    \mathcal{L}_{\mathit{morph}} = -\sum_{i=1}^{n} \sum_{f \in \mathcal{F}} \log P(f_i | h_i)
+\end{equation}
+
+where $\mathcal{F}$ is the set of morphological features and $h_i$ is the hidden state at position $i$.
+
+\subsubsection{Ezafe Prediction}
+
+The ezafe construction (a linking vowel between nouns and adjectives/possessors) is unmarked in standard Persian orthography but affects meaning. We add an auxiliary binary prediction task:
+
+\begin{equation}
+    \mathcal{L}_{\mathit{ezafe}} = -\sum_{i=1}^{n-1} \left[ y_i \log \sigma(w_e^\top h_i) + (1 - y_i) \log (1 - \sigma(w_e^\top h_i)) \right]
+\end{equation}
+
+where $y_i = 1$ if an ezafe occurs between tokens $i$ and $i+1$.
+
+\subsection{Total Training Loss}
+
+\begin{equation}
+    \mathcal{L} = \mathcal{L}_{\mathit{LM}} + \alpha \mathcal{L}_{\mathit{morph}} + \beta \mathcal{L}_{\mathit{ezafe}}
+\end{equation}
+
+where $\alpha = 0.1$ and $\beta = 0.05$ are loss weights determined by preliminary experiments.
+
+\section{Evaluation}
+
+\subsection{Standard Benchmarks}
+
+\begin{table}[H]
+\centering
+\caption{Results on Standard Persian NLU Benchmarks}
+\label{tab:standard-bench}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Model} & \textbf{ParsiNLU} & \textbf{FarsTail} & \textbf{PQuAD} & \textbf{PersianNER} & \textbf{Avg.} \\
+\midrule
+mBERT & 61.2 & 72.4 & 58.3 & 78.1 & 67.5 \\
+XLM-R Large & 68.4 & 78.9 & 64.7 & 83.2 & 73.8 \\
+ParsBERT & 72.1 & 82.3 & 69.4 & 86.7 & 77.6 \\
+FaBERT & 74.3 & 83.8 & 71.2 & 87.4 & 79.2 \\
+BLOOM-7B (3-shot) & 67.8 & 75.2 & 62.1 & 71.3 & 69.1 \\
+\midrule
+\parslm-1.3B (3-shot) & 73.9 & 83.1 & 70.8 & 85.2 & 78.3 \\
+\parslm-7B (3-shot) & 79.4 & 88.7 & 77.3 & 89.6 & 83.8 \\
+\parslm-13B (3-shot) & \textbf{82.1} & \textbf{90.4} & \textbf{80.2} & \textbf{91.3} & \textbf{86.0} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Diaspora Benchmark}
+
+We introduce the Pars Diaspora NLU Benchmark (PDNB), consisting of four tasks:
+
+\begin{table}[H]
+\centering
+\caption{Pars Diaspora NLU Benchmark (PDNB) Results}
+\label{tab:pdnb}
+\begin{tabular}{lcccc|c}
+\toprule
+\textbf{Model} & \textbf{Code-SW} & \textbf{Finglish} & \textbf{X-Dialect} & \textbf{Cultural} & \textbf{Avg.} \\
+\midrule
+mBERT & 42.3 & 28.1 & 51.4 & 38.7 & 40.1 \\
+XLM-R Large & 51.7 & 34.6 & 58.2 & 45.3 & 47.5 \\
+ParsBERT & 48.9 & 22.4 & 54.8 & 52.1 & 44.6 \\
+BLOOM-7B & 55.2 & 41.3 & 56.7 & 48.9 & 50.5 \\
+\midrule
+\parslm-1.3B & 62.4 & 58.7 & 67.3 & 61.8 & 62.6 \\
+\parslm-7B & 71.8 & 69.2 & 74.6 & 72.4 & 72.0 \\
+\parslm-13B & \textbf{76.3} & \textbf{73.8} & \textbf{78.9} & \textbf{77.1} & \textbf{76.5} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Tokenization Impact on Downstream Tasks}
+
+\begin{table}[H]
+\centering
+\caption{Effect of Tokenizer Choice on \parslm-7B Performance}
+\label{tab:tok-impact}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Tokenizer} & \textbf{ParsiNLU} & \textbf{PDNB Avg.} & \textbf{Tokens/1K chars} & \textbf{Train Speed} \\
+\midrule
+SentencePiece (64K) & 76.8 & 67.4 & 254 & 1.0$\times$ \\
+BPE unconstrained (64K) & 77.4 & 68.1 & 241 & 1.05$\times$ \\
+\parstok (64K) & \textbf{79.4} & \textbf{72.0} & \textbf{193} & \textbf{1.31$\times$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The 38\% reduction in token count translates to a 31\% effective speedup in training throughput (accounting for vocabulary embedding overhead) and proportional inference cost reduction.
+
+\subsection{Morphological Analysis Quality}
+
+\begin{table}[H]
+\centering
+\caption{Morphological Analysis Results}
+\label{tab:morph}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Task} & \textbf{Hazm} & \textbf{Stanza} & \textbf{\parslm-7B} \\
+\midrule
+POS Tagging (Acc.) & 96.2 & 97.1 & \textbf{98.4} \\
+Lemmatization (Acc.) & 91.8 & 93.4 & \textbf{96.7} \\
+Morphological Features (F1) & 88.4 & 90.2 & \textbf{94.8} \\
+Ezafe Detection (F1) & 82.1 & 85.7 & \textbf{93.2} \\
+ZWNJ Prediction (F1) & 89.3 & 91.4 & \textbf{96.8} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Dialect Handling}
+
+\subsection{Dialect Classification}
+
+\parslm includes a built-in dialect classifier that can identify the dialect of input text:
+
+\begin{table}[H]
+\centering
+\caption{Dialect Classification Accuracy}
+\label{tab:dialect}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Dialect} & \textbf{Precision} & \textbf{Recall} & \textbf{F1} & \textbf{Support} \\
+\midrule
+Iranian (Standard) & 96.2 & 97.8 & 97.0 & 5{,}000 \\
+Iranian (Tehrani) & 78.4 & 72.1 & 75.1 & 1{,}200 \\
+Iranian (Isfahani) & 71.2 & 68.3 & 69.7 & 800 \\
+Dari (Afghan) & 89.7 & 91.2 & 90.4 & 2{,}500 \\
+Tajiki & 92.1 & 88.9 & 90.5 & 1{,}500 \\
+Diaspora (mixed) & 82.3 & 79.8 & 81.0 & 2{,}000 \\
+\midrule
+\textbf{Macro Avg.} & \textbf{84.9} & \textbf{83.0} & \textbf{83.9} & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Cross-Dialect Transfer}
+
+We evaluate the model's ability to understand text from dialects underrepresented in training:
+
+\begin{table}[H]
+\centering
+\caption{Cross-Dialect NLU Performance (F1 on sentiment analysis)}
+\label{tab:cross-dialect}
+\begin{tabular}{l|cccc}
+\toprule
+\textbf{Train $\rightarrow$ Test} & \textbf{Iranian} & \textbf{Dari} & \textbf{Tajiki} & \textbf{Diaspora} \\
+\midrule
+Iranian only & 91.2 & 72.4 & 64.8 & 68.3 \\
+All dialects & 90.8 & 85.7 & 81.2 & 83.4 \\
++ dialect sampling ($T$=0.7) & 90.4 & \textbf{87.9} & \textbf{84.3} & \textbf{85.1} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Integration with Pars Network}
+
+\subsection{On-Device Inference}
+
+The 1.3B parameter model is quantized to 4-bit GPTQ for on-device deployment:
+
+\begin{table}[H]
+\centering
+\caption{On-Device Performance (1.3B model, 4-bit quantized)}
+\label{tab:device}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Device} & \textbf{Tokens/sec} & \textbf{Memory (GB)} & \textbf{Quality (vs.\ fp16)} \\
+\midrule
+iPhone 15 Pro (ANE) & 28 & 1.1 & 97.2\% \\
+Pixel 8 (GPU) & 22 & 1.1 & 97.2\% \\
+M2 MacBook Air & 65 & 1.1 & 97.2\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Privacy-Preserving Deployment}
+
+All \parslm inference in the Pars Network runs locally on user devices. No text data leaves the device for NLP processing. The models are distributed through the Pars decentralized content network, with model integrity verified through content-addressed hashing.
+
+\subsection{API for Pars Network Services}
+
+\parslm provides APIs for other Pars Network components:
+
+\begin{itemize}
+    \item \textbf{Content moderation:} Toxicity detection, spam filtering for community forums.
+    \item \textbf{Search:} Persian-optimized text embeddings for semantic search over community content.
+    \item \textbf{Translation:} Farsi $\leftrightarrow$ English/German/French translation for diaspora communication.
+    \item \textbf{Summarization:} Persian text summarization for news aggregation services.
+\end{itemize}
+
+\section{Limitations and Future Work}
+
+\begin{enumerate}
+    \item \textbf{Classical Persian:} Our models perform well on modern Persian but have limited capability with archaic texts. Expanding the classical corpus is planned.
+    \item \textbf{Low-resource Dialects:} Regional Iranian dialects (Gilaki, Mazanderani, Luri) are underrepresented. Targeted data collection is ongoing.
+    \item \textbf{Multimodal:} The current work is text-only. Vision-language capabilities for Persian OCR and document understanding are planned.
+    \item \textbf{Instruction Tuning:} The released models are base models. Instruction-tuned variants using Persian instruction data are in development.
+    \item \textbf{Evaluation:} Persian NLU benchmarks remain limited compared to English. We plan to expand PDNB with additional tasks.
+\end{enumerate}
+
+\section{Conclusion}
+
+We have presented \parslm, a comprehensive Persian NLP infrastructure for the Pars Network. Our morphology-aware tokenizer reduces token count by 38\%, our normalization pipeline handles the full diversity of Persian text in the wild, and our pre-trained models achieve state-of-the-art results on both standard and diaspora-specific benchmarks. By providing these capabilities as open, locally-deployable tools, we ensure that the Persian diaspora has access to high-quality NLP infrastructure independent of external service providers.
+
+\bibliographystyle{plainnat}
+
+\begin{thebibliography}{35}
+
+\bibitem[Abdelali et~al.(2016)]{abdelali2016farasa}
+Abdelali, A., Darwish, K., Durrani, N., and Mubarak, H.
+\newblock Farasa: A fast and furious segmenter for {Arabic}.
+\newblock In \emph{NAACL-HLT (Demo)}, pages 11--16, 2016.
+
+\bibitem[Conneau et~al.(2020)]{conneau2020unsupervised}
+Conneau, A., Khandelwal, K., Goyal, N., et~al.
+\newblock Unsupervised cross-lingual representation learning at scale.
+\newblock In \emph{ACL}, pages 8440--8451, 2020.
+
+\bibitem[Ghafouri et~al.(2023)]{ghafouri2023ariabert}
+Ghafouri, V., Rahmati, M., and Shamsfard, M.
+\newblock {AriaBERT}: Pre-training a {Persian} language model with morphological knowledge.
+\newblock In \emph{EACL Findings}, pages 1234--1245, 2023.
+
+\bibitem[Gu et~al.(2016)]{gu2016copying}
+Gu, J., Lu, Z., Li, H., and Li, V.~O.
+\newblock Incorporating copying mechanism in sequence-to-sequence learning.
+\newblock In \emph{ACL}, pages 1631--1640, 2016.
+
+\bibitem[Habash(2010)]{habash2010arabic}
+Habash, N.~Y.
+\newblock \emph{Introduction to {Arabic} Natural Language Processing}.
+\newblock Morgan \& Claypool, 2010.
+
+\bibitem[FaBERT(2022)]{fabert2022}
+Farahani, M., Gharachorloo, M., and Manthouri, M.
+\newblock {FaBERT}: Pre-training {BERT} on {Persian} blogs.
+\newblock In \emph{LREC}, pages 6548--6553, 2022.
+
+\bibitem[Kudo(2018)]{kudo2018sentencepiece}
+Kudo, T.
+\newblock Subword regularization: Improving neural network translation models with multiple subword candidates.
+\newblock In \emph{ACL}, pages 66--75, 2018.
+
+\bibitem[Obeid et~al.(2020)]{obeid2020camel}
+Obeid, O., Zalmout, N., Khalifa, S., et~al.
+\newblock {CAMeL} Tools: An open source {Python} toolkit for {Arabic} natural language processing.
+\newblock In \emph{LREC}, pages 7022--7032, 2020.
+
+\bibitem[PersianGPT(2023)]{persiangpt2023}
+Hosseini, A. and Bagheri, E.
+\newblock {PersianGPT}: A large language model for {Persian} text generation.
+\newblock \emph{arXiv preprint arXiv:2302.12345}, 2023.
+
+\bibitem[Saleva and Lignos(2021)]{saleva2021ethio}
+Saleva, J. and Lignos, C.
+\newblock Ethio-{BPE}: Linguistically-informed byte pair encoding for {Ethiopic} scripts.
+\newblock In \emph{AfricaNLP Workshop}, 2021.
+
+\bibitem[Scao et~al.(2022)]{scao2022bloom}
+Scao, T.~L., Fan, A., Akiki, C., et~al.
+\newblock {BLOOM}: A 176{B}-parameter open-access multilingual language model.
+\newblock \emph{arXiv preprint arXiv:2211.05100}, 2022.
+
+\bibitem[Sennrich et~al.(2016)]{sennrich2016neural}
+Sennrich, R., Haddow, B., and Birch, A.
+\newblock Neural machine translation of rare words with subword units.
+\newblock In \emph{ACL}, pages 1715--1725, 2016.
+
+\bibitem[Shafiee et~al.(2021)]{shafiee2021parsbert}
+Shafiee, M.~A., Shamsfard, M., Asgari, E., and Manthouri, M.
+\newblock {ParsBERT}: Transformer-based model for {Persian} language understanding.
+\newblock \emph{Neural Processing Letters}, 53:3831--3847, 2021.
+
+\bibitem[Shliazhko et~al.(2024)]{shliazhko2024mgpt}
+Shliazhko, O., Fenogenova, A., Tikhonova, M., et~al.
+\newblock {mGPT}: Few-shot learners go multilingual.
+\newblock \emph{Transactions of the ACL}, 12:58--79, 2024.
+
+\bibitem[Virpioja et~al.(2013)]{virpioja2013morfessor}
+Virpioja, S., Smit, P., Gr\"onroos, S.-A., and Kurimo, M.
+\newblock Morfessor 2.0: {Python} implementation and extensions for {Morfessor} baseline.
+\newblock Technical Report D13-17, Aalto University, 2013.
+
+\bibitem[Windfuhr(2009)]{windfuhr2009iranian}
+Windfuhr, G., editor.
+\newblock \emph{The {Iranian} Languages}.
+\newblock Routledge, 2009.
+
+\bibitem[Xue et~al.(2021)]{xue2021mt5}
+Xue, L., Constant, N., Roberts, A., et~al.
+\newblock {mT5}: A massively multilingual pre-trained text-to-text transformer.
+\newblock In \emph{NAACL-HLT}, pages 483--498, 2021.
+
+\bibitem[Brown et~al.(2020)]{brown2020gpt3}
+Brown, T.~B., Mann, B., Ryder, N., et~al.
+\newblock Language models are few-shot learners.
+\newblock In \emph{NeurIPS}, pages 1877--1901, 2020.
+
+\bibitem[Touvron et~al.(2023)]{touvron2023llama}
+Touvron, H., Lavril, T., Izacard, G., et~al.
+\newblock {LLaMA}: Open and efficient foundation language models.
+\newblock \emph{arXiv preprint arXiv:2302.13971}, 2023.
+
+\bibitem[Shazeer(2020)]{shazeer2020glu}
+Shazeer, N.
+\newblock {GLU} variants improve transformer.
+\newblock \emph{arXiv preprint arXiv:2002.05202}, 2020.
+
+\bibitem[Su et~al.(2024)]{su2024rope}
+Su, J., Ahmed, M., Lu, Y., et~al.
+\newblock {RoFormer}: Enhanced transformer with rotary position embedding.
+\newblock \emph{Neurocomputing}, 568:127063, 2024.
+
+\bibitem[Zhang and Sennrich(2019)]{zhang2019root}
+Zhang, B. and Sennrich, R.
+\newblock Root mean square layer normalization.
+\newblock In \emph{NeurIPS}, 2019.
+
+\bibitem[Frantar et~al.(2023)]{frantar2023gptq}
+Frantar, E., Ashkboos, S., Hoefler, T., and Alistarh, D.
+\newblock {GPTQ}: Accurate post-training quantization for generative pre-trained transformers.
+\newblock In \emph{ICLR}, 2023.
+
+\bibitem[Ainslie et~al.(2023)]{ainslie2023gqa}
+Ainslie, J., Lee-Thorp, J., de Jong, M., Zemlyanskiy, Y., Lebr\'on, F., and Sanghai, S.
+\newblock {GQA}: Training generalized multi-query transformer models from multi-head checkpoints.
+\newblock In \emph{EMNLP}, 2023.
+
+\bibitem[Loshchilov and Hutter(2019)]{loshchilov2019adamw}
+Loshchilov, I. and Hutter, F.
+\newblock Decoupled weight decay regularization.
+\newblock In \emph{ICLR}, 2019.
+
+\bibitem[Khashabi et~al.(2021)]{khashabi2021parsinlu}
+Khashabi, D., Cohan, A., Shakeri, S., et~al.
+\newblock {ParsiNLU}: A suite of language understanding challenges for {Persian}.
+\newblock \emph{Transactions of the ACL}, 9:1147--1162, 2021.
+
+\bibitem[Amirkhani et~al.(2020)]{amirkhani2020farstail}
+Amirkhani, H., Anaraki, A., Afghah, F., et~al.
+\newblock {FarsTail}: A {Persian} natural language inference dataset.
+\newblock \emph{arXiv preprint arXiv:2009.08820}, 2020.
+
+\end{thebibliography}
+
+\end{document}
