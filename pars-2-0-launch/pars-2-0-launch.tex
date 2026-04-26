@@ -2,7 +2,7 @@
 \usepackage{../shared/parscover}
 
 % ============================================================================
-% Pars 2.0 — GPU-Native Sovereign L1 with DEX+EVM+FHE Trifecta
+% Pars 2.0 — GPU-Native Sovereign L1 with DEX+EVM+FHE+SessionVM 4-Chain Set
 % Launch retrospective: 2026-02-14
 % ============================================================================
 
@@ -61,7 +61,7 @@
 \fancyfoot[C]{\thepage}
 
 \title{%
-    \textbf{Pars 2.0 --- GPU-Native Sovereign L1 with DEX+EVM+FHE Trifecta}\\[0.5em]
+    \textbf{Pars 2.0 --- GPU-Native Sovereign L1 with DEX+EVM+FHE+SessionVM 4-Chain Set}\\[0.5em]
     \large From private-messaging substrate (1.0) to financially-complete sovereign L1\\
     for the Persian diaspora\\[0.4em]
     \normalsize Pars Network Launch Retrospective --- February 14, 2026
@@ -81,7 +81,7 @@
 
 \begin{abstract}
 On 14 February 2026 the Pars Network activated its 2.0 epoch: a sovereign,
-GPU-native Layer~1 carrying the canonical \emph{trifecta} of every real
+GPU-native Layer~1 carrying the canonical financial-rail core of every real
 L1 in the Lux family --- a native decentralized exchange (DEX), an
 Ethereum Virtual Machine execution layer (EVM), and a fully-homomorphic
 encryption substrate (FHE). Pars 1.0 (2025) shipped the messaging,
@@ -90,14 +90,14 @@ omitted the financial rails; Pars 2.0 closes that gap without rewriting
 1.0 primitives. The 2.0 chain runs Quasar consensus 4.0 with QuasarSTM
 4.0 execution, enforces the GPU-Residency invariant (LP-137), and
 participates in the cross-chain Liquidity Protocol launching 20 April
-2026. This paper documents the 1.0$\to$2.0 transition, the trifecta
+2026. This paper documents the 1.0$\to$2.0 transition, the financial-rail core
 integration, the activation receipts captured at block height
 $h_0 = 14{,}000{,}000$ on the Pars main DAG, and the production
 parameters now in force.
 \end{abstract}
 
 \noindent\textbf{Keywords:} Pars Network, sovereign L1, GPU-native consensus,
-DEX+EVM+FHE trifecta, Persian diaspora, Liquidity Protocol, post-quantum.
+DEX+EVM+FHE foundation, Persian diaspora, Liquidity Protocol, post-quantum.
 
 \tableofcontents
 \newpage
@@ -271,15 +271,27 @@ These numbers are within $4\%$ of the figures projected in
 \texttt{pars-gpu-scaling} (2025).
 
 % ============================================================================
-\section{The Trifecta on Pars}
-\label{sec:trifecta}
+\section{Pars 4-Chain Set: DEX + EVM + FHE + SessionVM}
+\label{sec:chain-set}
 % ============================================================================
 
-The trifecta is the canonical configuration of a real Lux-family L1: a
-DEX for value, an EVM for logic, and an FHE substrate for confidential
-computation, all GPU-native and post-quantum. Pars 2.0 is the third
-network to adopt the trifecta, after Lux 4.0 (Feb 14) and Hanzo 4.0
-(Feb 14).
+Pars 2.0 runs exactly four chains: DEX (PARSWAP, D-Chain template),
+EVM (C-Chain template), FHE (F-Chain template), and **SessionVM**
+(S-Chain --- Pars-original). The first three are the financial-rail
+core that Hanzo 4.0 ships as its canonical \emph{triumvirate}.
+S-Chain is Pars-original: a post-quantum secure messaging substrate
+wire-compatible with the Session/Oxen ecosystem, upgraded to
+ML-DSA-65 + ML-KEM-768 for validator-quality post-quantum keys.
+Pars is "triumvirate-plus-SessionVM" --- four chains exactly, no
+local clones of Lux primary infrastructure.
+
+Pars does not run its own P-Chain or X-Chain. Validator staking,
+UTXO-asset workflows, threshold-key ceremonies (Q-Chain), ZK
+rollups (Z-Chain), attestation (A-Chain, AIVM), bridging
+(B-Chain), and MPC ceremonies (M-Chain) are accessed
+\emph{natively} via the Lux primary network --- same Quasar cert
+lanes, same subject-binding, same finality, no wrapped assets, no
+cross-chain hop tax.
 
 \subsection{DEX --- PARSWAP and Liquidity Protocol Integration}
 
@@ -413,7 +425,7 @@ $2 \times 10^7$. Both fit within $3 \times 10^8$.
 \label{sec:bridges}
 % ============================================================================
 
-Pars 2.0 maintains canonical bridges to the three other trifecta
+Pars 2.0 maintains canonical bridges to the three other Lux-family
 networks. Bridge security relies on threshold-signed light-client proofs
 plus a fallback fraud-proof window of 7 days.
 
@@ -443,7 +455,7 @@ attestation path because Lux is the root of trust for the family.
 % ============================================================================
 
 Pars 2.0 keeps the diaspora as the primary user. Three new application
-patterns are unlocked by the trifecta.
+patterns are unlocked by the financial-rail core plus Persian extensions.
 
 \subsection{Confidential Remittance}
 
