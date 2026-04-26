@@ -5,11 +5,24 @@ TEX_FILES := $(wildcard *.tex)
 PDF_FILES := $(patsubst %.tex,pdfs/%.pdf,$(TEX_FILES))
 PAPER_NAMES := $(patsubst %.tex,%,$(TEX_FILES))
 
-.PHONY: all clean clean-all help list $(PAPER_NAMES)
+# Launch retrospectives live in their own subdirectories
+SUBDIR_PAPERS := pars-2-0-launch
 
-all: $(PDF_FILES)
+.PHONY: all clean clean-all help list subdirs $(PAPER_NAMES) $(SUBDIR_PAPERS)
+
+all: $(PDF_FILES) subdirs
 	@echo "All papers compiled."
 	@ls -1 pdfs/*.pdf
+	@for d in $(SUBDIR_PAPERS); do ls -1 $$d/*.pdf 2>/dev/null || true; done
+
+subdirs: $(SUBDIR_PAPERS)
+
+$(SUBDIR_PAPERS):
+	@echo "Compiling subdir paper $@..."
+	@cd $@ && TEXINPUTS=../shared//:$$TEXINPUTS pdflatex -interaction=nonstopmode $@.tex > /dev/null 2>&1 || true
+	@cd $@ && TEXINPUTS=../shared//:$$TEXINPUTS pdflatex -interaction=nonstopmode $@.tex > /dev/null 2>&1 || true
+	@cd $@ && rm -f $@.aux $@.log $@.out $@.toc 2>/dev/null || true
+	@test -f $@/$@.pdf && echo "  OK $@/$@.pdf" || echo "  FAIL $@/$@.pdf"
 
 pdfs:
 	@mkdir -p pdfs

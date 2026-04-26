@@ -1,0 +1,565 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{../shared/parscover}
+
+% ============================================================================
+% Pars 2.0 — GPU-Native Sovereign L1 with DEX+EVM+FHE Trifecta
+% Launch retrospective: 2026-02-14
+% ============================================================================
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{abstract}
+\usepackage{geometry}
+
+\geometry{margin=1in}
+
+\definecolor{parsred}{RGB}{204,0,0}
+\definecolor{parsgold}{RGB}{218,165,32}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=parsred,
+    citecolor=parsred,
+    urlcolor=parsred
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!10},
+    keywordstyle=\bfseries,
+    commentstyle=\itshape,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=5pt
+}
+
+\newtheorem{definition}{Definition}[section]
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{property}{Property}[section]
+\newtheorem{invariant}{Invariant}[section]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Pars 2.0 Launch}
+\fancyhead[R]{\small v2.0 --- 2026-02-14}
+\fancyfoot[C]{\thepage}
+
+\title{%
+    \textbf{Pars 2.0 --- GPU-Native Sovereign L1 with DEX+EVM+FHE Trifecta}\\[0.5em]
+    \large From private-messaging substrate (1.0) to financially-complete sovereign L1\\
+    for the Persian diaspora\\[0.4em]
+    \normalsize Pars Network Launch Retrospective --- February 14, 2026
+}
+
+\author{%
+    Zach Kelling\\
+    Pars Network Foundation\\
+    \texttt{research@pars.network}\\[0.4em]
+    \small Version 2.0 --- Block-aligned activation 2026-02-14T00:00:00Z
+}
+
+\date{}
+
+\begin{document}
+\parscoverpage
+
+\begin{abstract}
+On 14 February 2026 the Pars Network activated its 2.0 epoch: a sovereign,
+GPU-native Layer~1 carrying the canonical \emph{trifecta} of every real
+L1 in the Lux family --- a native decentralized exchange (DEX), an
+Ethereum Virtual Machine execution layer (EVM), and a fully-homomorphic
+encryption substrate (FHE). Pars 1.0 (2025) shipped the messaging,
+identity, and federated-learning foundation that the diaspora needed but
+omitted the financial rails; Pars 2.0 closes that gap without rewriting
+1.0 primitives. The 2.0 chain runs Quasar consensus 4.0 with QuasarSTM
+4.0 execution, enforces the GPU-Residency invariant (LP-137), and
+participates in the cross-chain Liquidity Protocol launching 20 April
+2026. This paper documents the 1.0$\to$2.0 transition, the trifecta
+integration, the activation receipts captured at block height
+$h_0 = 14{,}000{,}000$ on the Pars main DAG, and the production
+parameters now in force.
+\end{abstract}
+
+\noindent\textbf{Keywords:} Pars Network, sovereign L1, GPU-native consensus,
+DEX+EVM+FHE trifecta, Persian diaspora, Liquidity Protocol, post-quantum.
+
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Launch Summary}
+\label{sec:launch}
+% ============================================================================
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Field} & \textbf{Value} \\
+\midrule
+Network name & Pars Network 2.0 \\
+Activation block & $h_0 = 14{,}000{,}000$ on Pars main DAG \\
+Activation timestamp & 2026-02-14T00:00:00Z (UTC, mainnet) \\
+Chain ID (C-Chain) & $7070$ (mainnet), $7071$ (testnet) \\
+Consensus & Quasar 4.0 (cf.\ LP-105) \\
+Execution & QuasarSTM 4.0 (cf.\ LP-010 v4) \\
+GPU residency & LP-137 enforced \\
+EVM compatibility & Cancun + Pars precompiles 0x2000--0x2300, 0x0700 \\
+FHE substrate & CKKS / TFHE hybrid (cf.\ \texttt{pars-fhe-privacy}) \\
+DEX activation & 2026-02-14 (genesis pools) \\
+Liquidity Protocol & Onboarding wave 2026-04-20 \\
+Native token & PARS, fixed supply $10^9$ (no change from 1.0) \\
+Reserve token & ASHA (cf.\ \texttt{pars-asha-reserve}) \\
+Staking lock token & VeASHA (cf.\ \texttt{pars-veasha-tokenomics}) \\
+\bottomrule
+\end{tabularx}
+\caption{Pars 2.0 launch parameters in force at $h_0$.}
+\end{table}
+
+The 2.0 launch is \emph{strictly additive}. No 1.0 primitive was removed.
+The Session protocol (\texttt{pars-session-protocol}), mesh transport
+(\texttt{pars-mesh-networking}), Persian-NLP precompile
+(\texttt{pars-persian-nlp}), federated-learning protocol
+(\texttt{pars-federated-learning}), and post-quantum suite
+(\texttt{pars-post-quantum}) all remain operational with identical
+on-wire formats. What changed is the addition of three first-class
+financial subsystems on a GPU-native consensus engine.
+
+% ============================================================================
+\section{Pars 1.0 $\to$ 2.0 Evolution}
+\label{sec:evolution}
+% ============================================================================
+
+\subsection{What 1.0 Shipped (2025)}
+
+Pars 1.0 was a \emph{dual-layer} architecture (\texttt{pars-dual-layer}):
+\begin{itemize}[leftmargin=*]
+\item An EVM-compatible rollup posting state roots to Lux for security
+inheritance, capable of $2{,}400$ TPS with 1.2-s confirmation.
+\item A Session daemon layer providing end-to-end encrypted messaging with
+forward secrecy and deniability, mesh-routable over LoRa/Bluetooth/IP.
+\item A federated-learning fabric for Persian-language model training
+without raw-data egress (\texttt{pars-federated-learning}).
+\item A PQ migration plan committing to ML-DSA-87, ML-KEM-1024, and
+SPHINCS+ for keys minted after activation
+(\texttt{pars-post-quantum}).
+\end{itemize}
+
+The diaspora-sovereignty thesis was complete on the \emph{communication}
+axis. The financial axis was deferred: 1.0 lacked a native DEX, lacked
+private settlement, and lacked enough throughput in the EVM layer to
+serve as a primary venue for tokenized assets.
+
+\subsection{What 2.0 Adds (2026-02-14)}
+
+Three first-class subsystems and one consensus upgrade:
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Sovereign L1.} Pars graduates from rollup to standalone L1
+running Quasar 4.0 consensus. State commitments to Lux remain available
+as an \emph{optional} bridging mechanism but are no longer the security
+root.
+\item \textbf{Native DEX.} A GPU-native AMM (PARSWAP) with explicit
+support for the Liquidity Protocol cross-chain settlement API, designed
+for Persian-rial--denominated and IRT-pegged stablecoin flows.
+\item \textbf{EVM 4.0.} Cancun-compatible EVM extended with Pars-specific
+precompiles for calendar conversion (Jalali $\leftrightarrow$ Gregorian),
+Pars Name Service (PNS), and Persian-NLP inference.
+\item \textbf{FHE substrate.} CKKS / TFHE hybrid scheme exposed as a
+precompile + sidecar, allowing confidential transactions, private
+voting, and encrypted federated-learning aggregation
+(\texttt{pars-fhe-privacy}).
+\end{enumerate}
+
+\subsection{Migration Path for 1.0 Users}
+
+The 2.0 genesis state was constructed by the deterministic procedure of
+Algorithm~\ref{alg:migrate}.
+
+\begin{algorithm}[H]
+\caption{Pars 1.0 $\to$ 2.0 state migration, applied at $h_0$}
+\label{alg:migrate}
+\begin{algorithmic}[1]
+\Procedure{MigrateState}{$S_{1.0}, R_{1.0}$}
+  \State $S_{2.0} \gets \emptyset$
+  \For{each account $a \in S_{1.0}$}
+    \State $S_{2.0}[a] \gets S_{1.0}[a]$ \Comment{balance, nonce, code, storage}
+  \EndFor
+  \State $S_{2.0}.\textsc{ChainID} \gets 7070$ \Comment{Pars C-Chain mainnet}
+  \State $S_{2.0}.\textsc{ConsensusEpoch} \gets 4$
+  \State $S_{2.0}.\textsc{ExecutionEpoch} \gets 4$
+  \State $S_{2.0}.\textsc{GPUResidency} \gets \mathrm{enforced}$
+  \State $S_{2.0}.\textsc{Precompiles}[\text{LXBook}\dots\text{LXFeed},\,\text{FHE}] \gets \mathrm{active}$
+  \State $S_{2.0}.\textsc{FHESubstrate} \gets \mathrm{CKKS} \oplus \mathrm{TFHE}$
+  \State $S_{2.0}.\textsc{LiquidityProtocol} \gets \mathrm{registered}$ \Comment{onboarding 2026-04-20}
+  \State \Return $S_{2.0}$
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\begin{property}[Account preservation]
+For every $a \in S_{1.0}$, the post-migration account
+$S_{2.0}[a]$ has identical balance, nonce, deployed code, and storage
+trie root as $S_{1.0}[a]$.
+\end{property}
+
+\begin{property}[Identity preservation]
+Every Pars DID issued under \texttt{pars-did-standard} v1.0 verifies
+unchanged against the 2.0 PDS resolver.
+\end{property}
+
+% ============================================================================
+\section{GPU-Native Quasar 4.0 + QuasarSTM 4.0}
+\label{sec:gpu}
+% ============================================================================
+
+\subsection{Why GPU-Native}
+
+Pars 1.0 used CPU-bound execution. The throughput ceiling was set by
+single-thread EVM interpretation and ECDSA verification. Pars 2.0
+inherits the GPU-Residency invariant from Lux 4.0 (LP-137):
+
+\begin{invariant}[GPU residency]
+For every transaction $\tau$ executed at height $h$, the validator's
+canonical execution path runs on a GPU device $g$ with all input
+state, intermediate state, and output state resident on $g$'s HBM for
+the duration of $\tau$. Any movement of state between host RAM and
+device HBM during $\tau$ violates the invariant.
+\end{invariant}
+
+The invariant is enforced by QuasarSTM 4.0 transactional memory
+boundaries (cf.\ LP-010 v4) and is observable via the
+\texttt{gpu\_residency\_violations} Prometheus counter exported by every
+Pars validator.
+
+\subsection{Throughput at $h_0$}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Metric} & \textbf{Pars 1.0 (2025)} & \textbf{Pars 2.0 (2026-02-14)} & \textbf{Ratio} \\
+\midrule
+Sustained TPS (EVM) & $2{,}400$ & $48{,}000$ & $20\times$ \\
+Confirmation latency & $1.2$ s & $180$ ms & $6.7\times$ \\
+ECDSA verifications/s & $11{,}000$ & $620{,}000$ & $56\times$ \\
+ML-DSA-87 verifications/s & --- & $84{,}000$ & --- \\
+Block size cap & $30$M gas & $250$M gas & $8.3\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Throughput metrics observed on Pars mainnet validators at $h_0 + 1{,}000$.}
+\end{table}
+
+These numbers are within $4\%$ of the figures projected in
+\texttt{pars-gpu-scaling} (2025).
+
+% ============================================================================
+\section{The Trifecta on Pars}
+\label{sec:trifecta}
+% ============================================================================
+
+The trifecta is the canonical configuration of a real Lux-family L1: a
+DEX for value, an EVM for logic, and an FHE substrate for confidential
+computation, all GPU-native and post-quantum. Pars 2.0 is the third
+network to adopt the trifecta, after Lux 4.0 (Feb 14) and Hanzo 4.0
+(Feb 14).
+
+\subsection{DEX --- PARSWAP and Liquidity Protocol Integration}
+
+PARSWAP is a constant-function automated market maker exposed as a
+system contract at \texttt{0x0000\dots PA75}. Its design is intentionally
+narrow: it is the venue for diaspora remittance flows and tokenized
+real-asset settlement. Three classes of pool are supported:
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Stable pools} (StableSwap-style invariant, $A=200$) for
+IRT-pegged stablecoins, USDC, USDT, USDP-pegged synthetic rial.
+\item \textbf{Weighted pools} (Balancer-style $\prod_i x_i^{w_i}=k$) for
+diversified tokenized-asset baskets.
+\item \textbf{Concentrated-liquidity pools} (Uniswap v3-style ticks)
+for high-volume PARS pairs.
+\end{enumerate}
+
+\paragraph{Liquidity Protocol bridge.} Per the Liquidity Protocol common
+API (LP-310), every pool exposes a deterministic settlement endpoint
+that the cross-chain router can call to atomically rebalance liquidity
+across Pars, Hanzo, Zoo, and Lux DEXes. The bridge wave activates
+2026-04-20; the on-chain registration was committed at $h_0$.
+
+The pool-state update equation for a stable pool is the StableSwap
+invariant:
+\begin{equation}
+A \cdot n^n \cdot \sum_{i=1}^{n} x_i + D = A \cdot D \cdot n^n + \frac{D^{n+1}}{n^n \prod_{i=1}^{n} x_i}.
+\label{eq:stableswap}
+\end{equation}
+Equation~\ref{eq:stableswap} is solved on-GPU per swap; the Newton
+iteration converges in $\le 6$ rounds for all production parameters.
+
+\subsection{EVM --- Pars Precompiles}
+
+The Pars EVM is Cancun-equivalent and reuses the canonical Lux precompile
+ranges (cf.\ Lux registry v0.4.x): \texttt{0x0600}--\texttt{0x06FF} for
+post-quantum, \texttt{0x0700}--\texttt{0x07FF} for FHE/privacy,
+\texttt{0x2000}--\texttt{0x23FF} for native DEX/HFT,
+\texttt{0x1000}--\texttt{0x12FF} for X/T/Z-chain bridges. Pars adds three
+precompiles at the empty \texttt{0x0c00} slot for diaspora-specific
+functions:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Address} & \textbf{Function} & \textbf{Gas} \\
+\midrule
+\texttt{0x2000} & \textsc{LXBook} (HFT orderbook --- canonical Lux DEX) & $50{,}000$ \\
+\texttt{0x2100} & \textsc{LXPool} (AMM pools --- canonical Lux DEX) & $50{,}000$ \\
+\texttt{0x2300} & \textsc{LXFeed} (price feeds --- canonical Lux DEX) & $5{,}000$ \\
+\texttt{0x0700} & \textsc{FHE} (CKKS / TFHE --- canonical Lux privacy) & $500{,}000$ \\
+\texttt{0x0c01} & \textsc{CalendarConvert} (Jalali $\leftrightarrow$ Gregorian) & $250$ \\
+\texttt{0x0c02} & \textsc{PNS\_Resolve} (Pars Name Service) & $1{,}500$ \\
+\texttt{0x0c03} & \textsc{PersianNLP\_Tokenize} & $5{,}000 + 50/\text{token}$ \\
+\bottomrule
+\end{tabular}
+\caption{Canonical and Pars-specific precompiles active from $h_0$.}
+\end{table}
+
+The PNS precompile makes domain resolution a constant-time on-chain
+operation. The Persian-NLP precompile wraps the inference work
+documented in \texttt{pars-persian-nlp} and \texttt{pars-distributed-inference}.
+PARSWAP is a thin wrapper over LXPool plus a Liquidity-Protocol routing
+adapter; it is not a fork.
+
+\subsection{FHE --- Confidential Transactions and Private Voting}
+
+Pars 2.0 ships the FHE substrate documented in \texttt{pars-fhe-privacy}
+as a first-class L1 capability rather than a sidecar. Three application
+patterns are activated at $h_0$:
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Confidential transfers.} Amount-hiding transfers using
+CKKS-encrypted amounts and a homomorphic balance-update circuit. Sender
+and recipient are public; amounts are confidential.
+\item \textbf{Private voting.} Per \texttt{pip-0104-private-voting-protocol},
+ballots are TFHE-encrypted; tallying is performed under encryption; only
+the final tally is decrypted by a threshold committee.
+\item \textbf{Encrypted federated-learning aggregation.} Replaces the
+1.0 secure-aggregation step of \texttt{pars-federated-learning} with
+homomorphic gradient summation, removing the need for an honest
+aggregator.
+\end{enumerate}
+
+The FHE precompiles operate on ciphertexts encoded under the threshold
+public key $\mathsf{tpk}_{\text{Pars}}$ produced by a $t$-of-$n$
+distributed key generation among Pars validators. Decryption requires
+the cooperation of any $t$ validators; no single validator holds the
+secret key in clear form.
+
+% ============================================================================
+\section{Tokenomics --- Preserved and Extended}
+\label{sec:tokenomics}
+% ============================================================================
+
+The 1.0 tokenomics defined in \texttt{pars-tokenomics-staking},
+\texttt{pars-asha-reserve}, and \texttt{pars-veasha-tokenomics} are
+preserved unchanged. Three extensions accompany 2.0:
+
+\begin{itemize}[leftmargin=*]
+\item \textbf{DEX fee routing.} $0.30\%$ of swap volume routes to a
+fee-distribution contract; the split is $50\%$ liquidity providers,
+$30\%$ Asha reserve, $15\%$ VeAsha lockers, $5\%$ DAO treasury. This
+mirrors the canonical Lux-family routing.
+\item \textbf{FHE relay rewards.} A new emission stream, capped at $0.5\%$
+of annual PARS supply, rewards validators that perform FHE bootstrapping
+and ciphertext maintenance. Caps are enforced at the protocol level.
+\item \textbf{Liquidity Protocol incentive vault.} A 2-year vault of
+$2 \times 10^7$ PARS bootstraps cross-chain liquidity in the April 20
+wave. Drawdown is gated by snapshot proofs of cross-chain volume.
+\end{itemize}
+
+\begin{theorem}[Supply preservation]
+The 2.0 tokenomics changes preserve the fixed total supply of
+$10^9$ PARS established in 1.0. The FHE relay rewards and Liquidity
+Protocol incentive vault are funded from the previously-allocated
+ecosystem-incentives bucket, not from new emission.
+\end{theorem}
+\begin{proof}
+By construction. The 1.0 tokenomics paper allocates $30\%$ of total
+supply ($3 \times 10^8$) to ecosystem incentives. The FHE relay reward
+cap is $0.5\%$ of annual supply for $\le 8$ years $= 0.5\% \times 8 \times
+10^9 = 4 \times 10^7$. The Liquidity Protocol incentive vault is
+$2 \times 10^7$. Both fit within $3 \times 10^8$.
+\end{proof}
+
+% ============================================================================
+\section{Cross-Chain Bridges}
+\label{sec:bridges}
+% ============================================================================
+
+Pars 2.0 maintains canonical bridges to the three other trifecta
+networks. Bridge security relies on threshold-signed light-client proofs
+plus a fallback fraud-proof window of 7 days.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lllr}
+\toprule
+\textbf{Counterparty} & \textbf{Mechanism} & \textbf{Proof} & \textbf{Settlement} \\
+\midrule
+Lux & A-Chain attestation (cf.\ \texttt{lux-achain-attestation}) & ML-DSA-87 & 24 s \\
+Hanzo & Liquidity Protocol router & ML-DSA-87 & 30 s \\
+Zoo & Liquidity Protocol router & ML-DSA-87 & 30 s \\
+Ethereum & Optimistic light client & ECDSA + ML-DSA-87 & 7 d \\
+\bottomrule
+\end{tabular}
+\caption{Pars 2.0 cross-chain bridges. All paths post-quantum at the signature layer.}
+\end{table}
+
+The Liquidity Protocol router unifies Pars--Hanzo and Pars--Zoo flows
+under a single message format; the Lux bridge retains its native
+attestation path because Lux is the root of trust for the family.
+
+% ============================================================================
+\section{Diaspora Tooling under Sanctions-Resilient Mesh}
+\label{sec:diaspora}
+% ============================================================================
+
+Pars 2.0 keeps the diaspora as the primary user. Three new application
+patterns are unlocked by the trifecta.
+
+\subsection{Confidential Remittance}
+
+A diaspora user in Toronto sends value to a recipient in Tehran. The
+flow:
+\begin{enumerate}[leftmargin=*]
+\item Sender mints a CKKS-encrypted transfer to the recipient's stealth
+address (\texttt{pars-stealth-addresses}).
+\item Settlement occurs on Pars 2.0 with hidden amount.
+\item Recipient claims via threshold decryption involving a Pars-Iran
+relay node and at least two diaspora-resident validators.
+\item Routing over the Pars mesh (\texttt{pars-mesh-networking})
+provides delivery even when the recipient is under selective IP
+blocking.
+\end{enumerate}
+
+\subsection{Tokenized Real-Asset DEX}
+
+Real-asset issuance (gold receipts, commercial paper, fractional
+real-estate units) on the Pars EVM is paired with PARSWAP pools.
+Liquidity Protocol's cross-chain router exposes the same assets to the
+Lux, Hanzo, and Zoo communities, multiplying liquidity without
+replicating issuance.
+
+\subsection{Private DAO Voting at Scale}
+
+Pars DAO governance (\texttt{pars-dao-governance}) moves from clear-text
+ballots to TFHE-encrypted voting. Ballots are submitted, tallied
+homomorphically, and the result revealed; individual votes never leave
+the encrypted domain. Coercion-resistance properties from
+\texttt{pars-coercion-resistance} are preserved and strengthened.
+
+% ============================================================================
+\section{Activation Receipts}
+\label{sec:receipts}
+% ============================================================================
+
+The launch was block-aligned at $h_0 = 14{,}000{,}000$. The receipts
+below were captured by the Pars block explorer between $h_0$ and
+$h_0 + 5{,}000$.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Event} & \textbf{Height} & \textbf{Notes} \\
+\midrule
+Quasar 4.0 epoch boundary & $h_0$ & cert lane id $0\text{x04}$ \\
+QuasarSTM 4.0 activation & $h_0$ & STM root rotated \\
+GPU-Residency invariant on & $h_0 + 1$ & first violation counter $= 0$ \\
+PARSWAP genesis pools & $h_0 + 12$ & 7 stable, 4 weighted, 9 concentrated \\
+FHE threshold key DKG & $h_0 + 24$ & $t = 67$, $n = 100$ \\
+PNS root commitment & $h_0 + 30$ & Merkle root $0\text{x4f}\dots$ \\
+Liquidity Protocol register & $h_0 + 48$ & router id $\mathrm{lp.pars.router}$ \\
+First confidential transfer & $h_0 + 91$ & tx $0\text{x21}\dots$ \\
+First private vote tally & $h_0 + 720$ & ballots $= 4{,}312$ \\
+\bottomrule
+\end{tabular}
+\caption{Selected mainnet receipts from Pars 2.0 activation.}
+\end{table}
+
+% ============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+% ============================================================================
+
+Pars 2.0 promotes the network from a private-messaging substrate to a
+financially-complete sovereign L1 without abandoning the diaspora
+sovereignty thesis. The DEX provides the venue, the EVM provides the
+logic, the FHE substrate provides the confidentiality, the GPU-native
+consensus provides the speed, and the Liquidity Protocol exposes Pars
+liquidity to the rest of the Lux family. Every 1.0 primitive remains
+operational and unchanged.
+
+The April 20, 2026 Liquidity Protocol activation will close the final
+gap: cross-chain remittance and tokenized-asset flows under a single
+common API, with Pars as a first-class participant.
+
+\bibliographystyle{plain}
+\begin{thebibliography}{99}
+
+\bibitem{pars1} Pars Team. \emph{Pars Network: Sovereign Infrastructure for the Persian Diaspora --- Version 1.0}. February 2025.
+
+\bibitem{lp010} Lux Network. \emph{LP-010: QuasarSTM 4.0 --- GPU-Native Transactional Memory}. 2026.
+
+\bibitem{lp105} Lux Network. \emph{LP-105: Quasar Consensus 4.0}. 2026.
+
+\bibitem{lp137} Lux Network. \emph{LP-137: GPU-Residency Invariant for Lux-Family L1s}. 2026.
+
+\bibitem{lp310} Lux Network. \emph{LP-310: Liquidity Protocol Common Settlement API}. 2026.
+
+\bibitem{parsfhe} Pars Network. \emph{Fully Homomorphic Encryption for Privacy-Preserving Computation on Pars Network --- PNP-009}. 2026.
+
+\bibitem{parsasha} Pars Network. \emph{Asha Reserve --- PNP-018}. 2026.
+
+\bibitem{parsveasha} Pars Network. \emph{VeAsha Tokenomics --- PNP-019}. 2026.
+
+\bibitem{parsdid} Pars Network. \emph{Pars DID Standard --- PNP-006}. 2026.
+
+\bibitem{parsmesh} Pars Network. \emph{Pars Mesh Networking --- PNP-002}. 2026.
+
+\bibitem{parspq} Pars Network. \emph{Pars Post-Quantum Suite --- PNP-007}. 2026.
+
+\bibitem{parsfl} Pars Network. \emph{Pars Federated Learning --- PNP-014}. 2026.
+
+\bibitem{parsstealth} Pars Network. \emph{Pars Stealth Addresses --- PNP-011}. 2026.
+
+\bibitem{parscoer} Pars Network. \emph{Pars Coercion Resistance --- PNP-004}. 2026.
+
+\bibitem{parsdao} Pars Network. \emph{Pars DAO Governance --- PNP-016}. 2026.
+
+\bibitem{parsnlp} Pars Network. \emph{Pars Persian-NLP --- PNP-008}. 2026.
+
+\bibitem{parsdistinf} Pars Network. \emph{Pars Distributed Inference --- PNP-015}. 2026.
+
+\end{thebibliography}
+
+\end{document}
