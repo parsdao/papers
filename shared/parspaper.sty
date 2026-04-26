@@ -1,0 +1,32 @@
+% shared/parspaper.sty -- Canonical preamble for all Pars papers
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{parspaper}[2026/04/13 Pars Research Paper Style]
+
+\RequirePackage[utf8]{inputenc}
+\RequirePackage[T1]{fontenc}
+\RequirePackage[margin=1in]{geometry}
+\RequirePackage{amsmath,amssymb,amsthm}
+\RequirePackage{algorithm}
+\RequirePackage{algpseudocode}
+\RequirePackage{graphicx}
+\RequirePackage{booktabs}
+\RequirePackage{tabularx}
+\RequirePackage{caption}
+\RequirePackage{enumitem}
+\RequirePackage{listings}
+\RequirePackage{xcolor}
+\input{shared/lstlang}
+\RequirePackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc}
+\RequirePackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue!70!black,citecolor=green!50!black,urlcolor=blue!60!black}
+\RequirePackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\lstset{basicstyle=\ttfamily\small,breaklines=true,frame=single,backgroundcolor=\color{gray!10},keywordstyle=\color{blue!70!black}\bfseries,commentstyle=\color{green!50!black}\itshape,stringstyle=\color{red!60!black},numbers=left,numberstyle=\tiny\color{gray},numbersep=5pt}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{corollary}{Corollary}[section]
